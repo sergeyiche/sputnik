@@ -1,0 +1,58 @@
+# VCS / IDE / OS
+.git/
+.cursor/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# Secrets & local env
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.egg
+
+# Node / frontend build
+node_modules/
+dist/
+apps/widget/dist/
+*.tsbuildinfo
+
+# Runtime data & caches
+data/chroma/
+data/knowledge_sources/**
+!data/knowledge_sources/README.md
+.cache/
+**/.cache/
+hf_cache/
+.tools/
+
+# Certs (скачиваются скриптом)
+config/certs/*.pem
+config/certs/*.crt
+!config/certs/.gitkeep
+
+# Logs & temp
+*.log
+tmp/
+temp/
+*.tmp
+
+# Docker / local overrides
+docker-compose.override.yml

@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Демо — ассистент по болезни Паркинсона</title>
+  <link rel="stylesheet" href="/widget/parkinson-chat-widget.css" />
+  <style>
+    :root {
+      color-scheme: light;
+    }
+    body {
+      margin: 0;
+      font-family: Georgia, "Times New Roman", serif;
+      color: #1a2332;
+      background:
+        radial-gradient(circle at top right, #dbeafe 0, transparent 40%),
+        linear-gradient(180deg, #f8fafc 0%, #eef2ff 100%);
+      min-height: 100vh;
+      line-height: 1.6;
+    }
+    main {
+      max-width: 720px;
+      margin: 0 auto;
+      padding: 48px 24px 120px;
+    }
+    .brand {
+      font-family: system-ui, sans-serif;
+      font-size: 0.85rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #1e40af;
+      margin: 0 0 12px;
+    }
+    h1 {
+      font-size: clamp(2rem, 4vw, 2.75rem);
+      line-height: 1.15;
+      margin: 0 0 16px;
+      font-weight: 700;
+    }
+    .lead {
+      font-size: 1.15rem;
+      color: #334155;
+      margin: 0 0 24px;
+    }
+    .note {
+      font-family: system-ui, sans-serif;
+      background: rgba(37, 99, 235, 0.08);
+      border-left: 4px solid #2563eb;
+      padding: 14px 16px;
+      margin: 0 0 32px;
+      font-size: 0.95rem;
+    }
+    .hint {
+      font-family: system-ui, sans-serif;
+      color: #64748b;
+      font-size: 0.95rem;
+    }
+    code {
+      font-family: ui-monospace, monospace;
+      background: #e2e8f0;
+      padding: 0.1em 0.35em;
+      border-radius: 4px;
+    }
+    .spacer {
+      height: 60vh;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <p class="brand">Oracool · демо</p>
+    <h1>Поддержка при болезни Паркинсона</h1>
+    <p class="lead">
+      Минимальная страница для проверки плавающего чата. Нажмите синюю кнопку
+      в правом нижнем углу — откроется ассистент.
+    </p>
+    <div class="note">
+      Ассистент даёт справочную информацию по материалам базы знаний и
+      <strong>не заменяет</strong> консультацию врача.
+    </div>
+    <!-- <p class="hint">
+      Виджет грузится с <code>/widget/parkinson-chat-widget.js</code>.
+      Запросы к API идут через nginx на тот же origin (<code>/v1/…</code>).
+    </p> -->
+    <div class="spacer" aria-hidden="true"></div>
+    <p class="hint">Прокрутите вверх — кнопка чата остаётся на месте.</p>
+  </main>
+
+  <!-- api-url пустой → same origin (через nginx proxy) -->
+  <parkinson-chat-widget></parkinson-chat-widget>
+  <script src="/widget/parkinson-chat-widget.js" defer></script>
+</body>
+</html>

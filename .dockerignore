@@ -1,0 +1,39 @@
+# VCS / IDE
+.git
+.gitignore
+.cursor
+.vscode
+*.md
+!README.md
+
+# Local Python / Node
+.venv
+venv
+__pycache__
+*.py[cod]
+.pytest_cache
+.mypy_cache
+*.egg-info
+node_modules
+dist
+
+# Local caches and runtime data (mounted as volumes)
+data/chroma
+.cache
+**/.cache
+
+# Secrets & env (passed via env_file / compose)
+.env
+.env.*
+!.env.example
+
+# Tests not needed in runtime image
+tests
+pytest.ini
+scripts/test-*.sh
+scripts/api-curl.sh
+scripts/ask.sh
+scripts/dev-api.sh
+scripts/run-tests.sh
+sample-site
+apps/widget

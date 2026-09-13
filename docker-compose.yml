@@ -1,0 +1,97 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    image: oracool-api:latest
+    container_name: oracool-api
+    ports:
+      - "${API_PORT:-8000}:8000"
+    env_file:
+      - .env
+    environment:
+      # Пути внутри контейнера (перекрывают локальные ./ из .env)
+      CHROMA_PERSIST_DIR: /app/data/chroma
+      KNOWLEDGE_DIR: /app/data/knowledge
+      KNOWLEDGE_SOURCES_DIR: /app/data/knowledge_sources
+      SYSTEM_PROMPT_PATH: /app/config/system_prompt.md
+      GIGACHAT_CA_BUNDLE_FILE: /app/config/certs/gigachat-ca-bundle.pem
+      HF_HOME: /app/.cache/huggingface
+      TRANSFORMERS_CACHE: /app/.cache/huggingface
+      SENTENCE_TRANSFORMERS_HOME: /app/.cache/torch/sentence_transformers
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8080,http://127.0.0.1:8080,http://localhost:5173,http://127.0.0.1:5173}
+    volumes:
+      # База знаний — с хоста
+      - ./data/knowledge:/app/data/knowledge
+      - ./data/knowledge_sources:/app/data/knowledge_sources
+      # Chroma в named volume — без проблем с правами bind-mount (readonly sqlite)
+      - chroma_data:/app/data/chroma
+      # Код packages — без rebuild при правках RAG/ETL
+      - ./packages:/app/packages
+      # Промпт и сертификаты
+      - ./config:/app/config
+      # Кеш моделей embeddings
+      - hf_cache:/app/.cache
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+    restart: unless-stopped
+
+  # Одноразовая индексация: docker compose --profile tools run --rm ingest
+  ingest:
+    profiles: ["tools"]
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    image: oracool-api:latest
+    container_name: oracool-ingest
+    env_file:
+      - .env
+    environment:
+      CHROMA_PERSIST_DIR: /app/data/chroma
+      KNOWLEDGE_DIR: /app/data/knowledge
+      KNOWLEDGE_SOURCES_DIR: /app/data/knowledge_sources
+      GIGACHAT_CA_BUNDLE_FILE: /app/config/certs/gigachat-ca-bundle.pem
+      EMBEDDINGS_PROVIDER: ${EMBEDDINGS_PROVIDER:-local}
+      HF_HOME: /app/.cache/huggingface
+      TRANSFORMERS_CACHE: /app/.cache/huggingface
+      SENTENCE_TRANSFORMERS_HOME: /app/.cache/torch/sentence_transformers
+    volumes:
+      - ./data/knowledge:/app/data/knowledge
+      - ./data/knowledge_sources:/app/data/knowledge_sources
+      - chroma_data:/app/data/chroma
+      - ./config:/app/config
+      - hf_cache:/app/.cache
+    entrypoint: ["/app/scripts/docker-entrypoint.sh"]
+    command:
+      [
+        "python",
+        "-m",
+        "packages.etl.ingest",
+        "--source",
+        "/app/data/knowledge",
+        "--recreate",
+      ]
+    restart: "no"
+
+  # Frontend: docker compose --profile frontend up -d --build
+  widget:
+    profiles: ["frontend"]
+    build:
+      context: .
+      dockerfile: apps/widget/Dockerfile
+    image: oracool-widget:latest
+    container_name: oracool-widget
+    ports:
+      - "${WIDGET_PORT:-8080}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  hf_cache:
+  chroma_data:
