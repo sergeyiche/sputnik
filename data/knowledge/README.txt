@@ -1,10 +1,10 @@
 # source-file: README.md
 # source-format: md
-# converted-at: 2026-09-02T14:26:23.614510+00:00
+# converted-at: 2026-09-13T14:34:55.915342+00:00
 
 # Сырые исходники базы знаний
 
-Положите сюда файлы в форматах **PDF**, **DOCX**, **TXT**, **MD**.
+Положите сюда файлы в форматах **PDF**, **DOCX**, **XLSX**, **TXT**, **MD**.
 
 ## Порядок обработки
 
@@ -19,8 +19,16 @@ ChromaDB                  ← чанки для RAG
 ## Команды
 
 ```bash
-# Только конвертация
+# Вся папка sources
 ./scripts/convert-sources.sh
+
+# Один или несколько файлов
+./scripts/convert-sources.sh "data/knowledge_sources/Список врачей.xlsx"
+./scripts/convert-sources.sh path/to/a.pdf path/to/b.docx
+
+# Принудительно пересобрать
+./scripts/convert-sources.sh --force
+./scripts/convert-sources.sh --force "data/knowledge_sources/Список врачей.xlsx"
 
 # Конвертация + индексация
 ./scripts/sync-knowledge.sh

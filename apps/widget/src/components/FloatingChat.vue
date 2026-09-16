@@ -190,6 +190,11 @@ const hasMessages = computed(() => messages.value.length > 0)
 
 <style scoped>
 .pcw-root {
+  --pcw-brand: #fc7f03;
+  --pcw-brand-dark: #e06e00;
+  --pcw-brand-soft: #fff4e8;
+  --pcw-brand-shadow: rgba(252, 127, 3, 0.45);
+
   position: fixed;
   bottom: 24px;
   right: 24px;
@@ -205,10 +210,10 @@ const hasMessages = computed(() => messages.value.length > 0)
   height: 60px;
   border-radius: 50%;
   border: none;
-  background: #2563eb;
+  background: var(--pcw-brand);
   color: #fff;
   cursor: pointer;
-  box-shadow: 0 4px 20px rgba(37, 99, 235, 0.45);
+  box-shadow: 0 4px 20px var(--pcw-brand-shadow);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -231,7 +236,7 @@ const hasMessages = computed(() => messages.value.length > 0)
 }
 
 .pcw-header {
-  background: #1e40af;
+  background: var(--pcw-brand);
   color: #fff;
   padding: 14px 16px;
   display: flex;
@@ -247,8 +252,8 @@ const hasMessages = computed(() => messages.value.length > 0)
 
 .pcw-disclaimer {
   margin: 4px 0 0;
-  font-size: 0.8rem;
-  opacity: 0.9;
+  font-size: 0.72rem;
+  opacity: 0.75;
   line-height: 1.35;
 }
 
@@ -259,7 +264,7 @@ const hasMessages = computed(() => messages.value.length > 0)
 }
 
 .pcw-icon-btn {
-  background: rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.2);
   border: none;
   color: #fff;
   width: 32px;
@@ -267,6 +272,10 @@ const hasMessages = computed(() => messages.value.length > 0)
   border-radius: 8px;
   cursor: pointer;
   font-size: 1rem;
+}
+
+.pcw-icon-btn:hover {
+  background: rgba(255, 255, 255, 0.35);
 }
 
 .pcw-messages {
@@ -296,12 +305,12 @@ const hasMessages = computed(() => messages.value.length > 0)
   padding: 10px 12px;
   cursor: pointer;
   font: inherit;
-  color: #1e40af;
+  color: var(--pcw-brand-dark);
 }
 
 .pcw-suggestion:hover:not(:disabled) {
-  border-color: #2563eb;
-  background: #eff6ff;
+  border-color: var(--pcw-brand);
+  background: var(--pcw-brand-soft);
 }
 
 .pcw-suggestion:disabled {
@@ -326,7 +335,7 @@ const hasMessages = computed(() => messages.value.length > 0)
 }
 
 .pcw-bubble--user {
-  background: #2563eb;
+  background: var(--pcw-brand);
   color: #fff;
   border-bottom-right-radius: 4px;
 }
@@ -344,6 +353,19 @@ const hasMessages = computed(() => messages.value.length > 0)
 
 .pcw-bubble--assistant :deep(p:last-child) {
   margin-bottom: 0;
+}
+
+/* Медицинский дисклеймер после --- в ответе */
+.pcw-bubble--assistant :deep(hr) {
+  border: none;
+  border-top: 1px solid #e2e8f0;
+  margin: 0.75em 0 0.5em;
+}
+
+.pcw-bubble--assistant :deep(hr ~ *) {
+  font-size: 0.75rem;
+  line-height: 1.4;
+  color: #94a3b8;
 }
 
 .pcw-error {
@@ -371,12 +393,12 @@ const hasMessages = computed(() => messages.value.length > 0)
 }
 
 .pcw-input:focus {
-  outline: 2px solid #2563eb;
+  outline: 2px solid var(--pcw-brand);
   outline-offset: 0;
 }
 
 .pcw-send {
-  background: #2563eb;
+  background: var(--pcw-brand);
   color: #fff;
   border: none;
   border-radius: 10px;

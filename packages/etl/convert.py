@@ -1,4 +1,4 @@
-"""Convert raw knowledge sources (pdf, docx, txt, md) to normalized .txt files."""
+"""Convert raw knowledge sources (pdf, docx, xlsx, txt, md) to normalized .txt files."""
 
 from __future__ import annotations
 
@@ -22,6 +22,17 @@ class ConvertResult:
 def _build_output_path(source: Path, sources_root: Path, output_root: Path) -> Path:
     relative = source.relative_to(sources_root)
     return output_root / relative.with_suffix(".txt")
+
+
+def _resolve_sources_root(source: Path, sources_dir: Path) -> Path:
+    """Keep mirror path under sources_dir when possible; else use file's parent."""
+    source = source.resolve()
+    sources_dir = sources_dir.resolve()
+    try:
+        source.relative_to(sources_dir)
+        return sources_dir
+    except ValueError:
+        return source.parent
 
 
 def _format_output(source: Path, text: str) -> str:
@@ -78,6 +89,50 @@ def convert_file(
         return ConvertResult(source=source, output=output, status="failed", message=str(exc))
 
 
+def convert_paths(
+    paths: list[str | Path],
+    output_dir: str | Path,
+    *,
+    sources_dir: str | Path | None = None,
+    force: bool = False,
+) -> list[ConvertResult]:
+    """Convert one or more explicit source files."""
+    output_root = Path(output_dir)
+    output_root.mkdir(parents=True, exist_ok=True)
+    default_sources = Path(
+        sources_dir
+        if sources_dir is not None
+        else os.getenv("KNOWLEDGE_SOURCES_DIR", "./data/knowledge_sources")
+    )
+
+    results: list[ConvertResult] = []
+    for raw in paths:
+        source = Path(raw).expanduser().resolve()
+        if not source.is_file():
+            results.append(
+                ConvertResult(
+                    source=source,
+                    output=output_root / f"{source.name}.txt",
+                    status="failed",
+                    message="File not found",
+                )
+            )
+            continue
+        if source.suffix.lower() not in SUPPORTED_EXTENSIONS:
+            results.append(
+                ConvertResult(
+                    source=source,
+                    output=output_root / source.with_suffix(".txt").name,
+                    status="failed",
+                    message=f"Unsupported extension: {source.suffix}",
+                )
+            )
+            continue
+        sources_root = _resolve_sources_root(source, default_sources)
+        results.append(convert_file(source, sources_root, output_root, force=force))
+    return results
+
+
 def convert_sources(
     sources_dir: str | Path,
     output_dir: str | Path,
@@ -126,12 +181,20 @@ def _print_summary(results: list[ConvertResult]) -> int:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Convert raw knowledge sources to normalized UTF-8 .txt files",
+        description=(
+            "Convert raw knowledge sources to normalized UTF-8 .txt files. "
+            "Pass file paths to convert individually, or omit them to scan --sources."
+        ),
+    )
+    parser.add_argument(
+        "paths",
+        nargs="*",
+        help="Optional file path(s) to convert (pdf, docx, xlsx, txt, md)",
     )
     parser.add_argument(
         "--sources",
         default=os.getenv("KNOWLEDGE_SOURCES_DIR", "./data/knowledge_sources"),
-        help="Directory with raw files (pdf, docx, txt, md)",
+        help="Directory with raw files when converting the whole tree (default)",
     )
     parser.add_argument(
         "--output",
@@ -141,13 +204,23 @@ def main() -> None:
     parser.add_argument(
         "--force",
         action="store_true",
-        help="Reconvert all files even if output is up to date",
+        help="Reconvert even if output is up to date",
     )
     args = parser.parse_args()
 
-    results = convert_sources(args.sources, args.output, force=args.force)
+    if args.paths:
+        results = convert_paths(
+            args.paths,
+            args.output,
+            sources_dir=args.sources,
+            force=args.force,
+        )
+    else:
+        results = convert_sources(args.sources, args.output, force=args.force)
+
     if not results:
-        print(f"No supported files found in {args.sources}")
+        target = ", ".join(args.paths) if args.paths else str(args.sources)
+        print(f"No supported files found in {target}")
         print(f"Supported: {', '.join(sorted(SUPPORTED_EXTENSIONS))}")
         return
 

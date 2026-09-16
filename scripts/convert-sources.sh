@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
-# Конвертация сырых файлов (pdf, docx, txt, md) → data/knowledge/*.txt
+# Конвертация сырых файлов (pdf, docx, xlsx, txt, md) → data/knowledge/*.txt
+# Примеры:
+#   ./scripts/convert-sources.sh
+#   ./scripts/convert-sources.sh --force
+#   ./scripts/convert-sources.sh "data/knowledge_sources/Список врачей.xlsx"
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

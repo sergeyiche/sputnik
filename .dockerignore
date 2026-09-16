@@ -3,8 +3,13 @@
 .gitignore
 .cursor
 .vscode
+.idea
+
+# Docs (not needed in images); keep config prompts
+docs
 *.md
 !README.md
+!config/**/*.md
 
 # Local Python / Node
 .venv
@@ -14,26 +19,27 @@ __pycache__
 .pytest_cache
 .mypy_cache
 *.egg-info
-node_modules
-dist
+**/node_modules
+apps/widget/dist
 
 # Local caches and runtime data (mounted as volumes)
 data/chroma
 .cache
 **/.cache
+.tools
 
 # Secrets & env (passed via env_file / compose)
 .env
 .env.*
 !.env.example
 
-# Tests not needed in runtime image
+# Tests / local-only scripts (not needed in runtime images)
 tests
 pytest.ini
 scripts/test-*.sh
 scripts/api-curl.sh
 scripts/ask.sh
 scripts/dev-api.sh
+scripts/dev-widget.sh
+scripts/serve-demo.sh
 scripts/run-tests.sh
-sample-site
-apps/widget

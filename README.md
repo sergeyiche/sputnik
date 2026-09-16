@@ -14,7 +14,7 @@
 - Ключ авторизации GigaChat (`GIGACHAT_AUTHORIZATION_KEY` из [GigaChat Studio](https://developers.sber.ru/docs/ru/gigachat/api/reference/rest/gigachat-api))
 - Нормализованные тексты базы знаний в `data/knowledge/` (`.txt`)
 
-> Сырые исходники (`data/knowledge_sources/`) **не хранятся в git**. Положите PDF/DOCX локально и сконвертируйте, либо используйте уже подготовленные `.txt` в `data/knowledge/`.
+> Сырые исходники (`data/knowledge_sources/`) **не хранятся в git**. Положите PDF/DOCX/XLSX локально и сконвертируйте, либо используйте уже подготовленные `.txt` в `data/knowledge/`.
 
 ### 1. Клонирование и окружение
 
@@ -80,7 +80,7 @@ docker compose --profile frontend down
 
 | Путь | В git | Назначение |
 |------|-------|------------|
-| `data/knowledge_sources/` | нет | Сырые PDF/DOCX/… |
+| `data/knowledge_sources/` | нет | Сырые PDF/DOCX/XLSX/… |
 | `data/knowledge/` | да (нормализованные `.txt`) | Вход для ingest |
 | `data/chroma/` | нет | Векторный индекс (volume) |
 
