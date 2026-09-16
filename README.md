@@ -74,6 +74,8 @@ curl -s http://localhost:8000/v1/knowledge/status | python3 -m json.tool
 docker compose --profile frontend down
 ```
 
+Чеклист VPS: [`docs/server-setup.md`](docs/server-setup.md) · скрипт: `./scripts/setup-server.sh`
+
 ---
 
 ## База знаний
