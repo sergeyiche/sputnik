@@ -73,3 +73,19 @@ class ChromaVectorStore(VectorStore):
         if collection is None:
             return 0
         return int(collection.count())
+
+    def list_documents(self) -> list[str]:
+        collection = getattr(self._store, "_collection", None)
+        if collection is None:
+            return []
+
+        result = collection.get(include=["metadatas"])
+        names: set[str] = set()
+        for meta in result.get("metadatas") or []:
+            if not meta:
+                continue
+            raw = meta.get("source") or meta.get("path")
+            if not raw:
+                continue
+            names.add(Path(str(raw)).name)
+        return sorted(names)

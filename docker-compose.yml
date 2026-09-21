@@ -26,7 +26,8 @@ services:
       - ./data/knowledge_sources:/app/data/knowledge_sources
       # Chroma в named volume — без проблем с правами bind-mount (readonly sqlite)
       - chroma_data:/app/data/chroma
-      # Код packages — без rebuild при правках RAG/ETL
+      # Код API и packages — без rebuild при правках
+      - ./apps/api:/app/apps/api
       - ./packages:/app/packages
       # Промпт и сертификаты
       - ./config:/app/config

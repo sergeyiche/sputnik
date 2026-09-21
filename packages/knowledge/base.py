@@ -36,3 +36,8 @@ class VectorStore(ABC):
     @abstractmethod
     def count(self) -> int:
         ...
+
+    @abstractmethod
+    def list_documents(self) -> list[str]:
+        """Return unique document names currently stored in the index."""
+        ...
