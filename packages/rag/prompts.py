@@ -7,39 +7,39 @@ from functools import lru_cache
 from pathlib import Path
 
 DEFAULT_SYSTEM_PROMPT = """\
-Ты — информационный ассистент для людей с болезнью Паркинсона и их близких.
-
-Правила:
-1. Отвечай только на основе предоставленного контекста из базы знаний.
-2. Если в контексте нет достаточной информации — честно скажи об этом и предложи обратиться к врачу.
-3. Не ставь диагнозы, не назначай лечение и не меняй схему приёма препаратов.
-4. Пиши понятным языком, без излишнего медицинского жаргона.
-5. Отвечай на том языке, на котором задан вопрос (русский по умолчанию).
-6. Если вопрос не связан с болезнью Паркинсона — вежливо перенаправь к теме.
+Ты — «Спутник», информационный ассистент фонда «Движение — жизнь» для людей с болезнью Паркинсона и их близких.
+Ты не врач. Отвечай только по переданному контексту из базы знаний; если данных мало — скажи об этом.
+Не ставь диагнозы и не назначай лечение. Пиши просто и бережно. Язык — как у вопроса (русский по умолчанию).
 """
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_PROMPT_PATH = PROJECT_ROOT / "config" / "system_prompt.md"
 
+USER_RAG_INSTRUCTIONS = """\
+Ответь на вопрос пользователя, опираясь только на фрагменты контекста ниже.
+- Используй лишь те фрагменты, которые реально относятся к вопросу; остальное игнорируй.
+- Если релевантных фактов недостаточно — честно скажи об этом и предложи обратиться к специалисту.
+- Не добавляй факты, которых нет в контексте.
+- Имена файлов-источников можно кратко упомянуть, если это помогает (без жаргона про «базу» и RAG).
+"""
+
 
 def _strip_markdown_preamble(text: str) -> str:
-    """Remove YAML-style comment block and markdown heading at the top of prompt file."""
+    """Remove leading title, blockquotes and horizontal rules before the prompt body."""
     lines = text.splitlines()
-    body: list[str] = []
-    in_comment = False
-    for line in lines:
-        stripped = line.strip()
-        if stripped.startswith(">"):
+    i = 0
+    while i < len(lines):
+        stripped = lines[i].strip()
+        if (
+            not stripped
+            or stripped.startswith(">")
+            or stripped.startswith("# ")
+            or stripped == "---"
+        ):
+            i += 1
             continue
-        if stripped.startswith("# ") and not body:
-            continue
-        if stripped == "---" and not body:
-            in_comment = not in_comment
-            continue
-        if in_comment:
-            continue
-        body.append(line)
-    return "\n".join(body).strip()
+        break
+    return "\n".join(lines[i:]).strip()
 
 
 def _resolve_prompt_path() -> Path:
@@ -68,3 +68,22 @@ def reload_system_prompt() -> str:
     """Clear cache after prompt file edit (for future admin hot-reload)."""
     _read_prompt_file.cache_clear()
     return get_system_prompt()
+
+
+def build_rag_user_message(question: str, context: str) -> str:
+    return (
+        f"{USER_RAG_INSTRUCTIONS}\n\n"
+        f"Контекст из базы знаний:\n\n{context}\n\n"
+        f"Вопрос пользователя: {question}"
+    )
+
+
+def strip_trailing_disclaimer(text: str) -> str:
+    """Remove medical disclaimer appendix from stored assistant turns (keeps history lean)."""
+    markers = ("\n\n---\n", "\n---\n")
+    cut = len(text)
+    for marker in markers:
+        idx = text.find(marker)
+        if idx != -1:
+            cut = min(cut, idx)
+    return text[:cut].strip()

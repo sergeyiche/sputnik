@@ -13,6 +13,19 @@ from packages.integrations.gigachat.langchain_config import (
 )
 
 
+class PrefixedE5Embeddings(Embeddings):
+    """multilingual-e5_* expects ``query:`` / ``passage:`` prefixes for best retrieval."""
+
+    def __init__(self, base: Embeddings) -> None:
+        self._base = base
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        return self._base.embed_documents([f"passage: {text}" for text in texts])
+
+    def embed_query(self, text: str) -> list[float]:
+        return self._base.embed_query(f"query: {text}")
+
+
 def create_embeddings(*, access_token: str | None = None) -> Embeddings:
     provider = os.getenv("EMBEDDINGS_PROVIDER", "gigachat").lower()
 
@@ -41,6 +54,13 @@ def create_embeddings(*, access_token: str | None = None) -> Embeddings:
         from langchain_huggingface import HuggingFaceEmbeddings
 
         model = os.getenv("LOCAL_EMBEDDINGS_MODEL", "intfloat/multilingual-e5-small")
-        return HuggingFaceEmbeddings(model_name=model)
+        base = HuggingFaceEmbeddings(
+            model_name=model,
+            encode_kwargs={"normalize_embeddings": True},
+        )
+        # e5-family models need asymmetric prefixes
+        if "e5" in model.lower():
+            return PrefixedE5Embeddings(base)
+        return base
 
     raise ValueError(f"Unknown EMBEDDINGS_PROVIDER: {provider}. Supported: gigachat, local")

@@ -63,6 +63,7 @@ services:
       - ./data/knowledge:/app/data/knowledge
       - ./data/knowledge_sources:/app/data/knowledge_sources
       - chroma_data:/app/data/chroma
+      - ./packages:/app/packages
       - ./config:/app/config
       - hf_cache:/app/.cache
     entrypoint: ["/app/scripts/docker-entrypoint.sh"]
