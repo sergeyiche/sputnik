@@ -28,7 +28,7 @@ def test_strip_trailing_disclaimer() -> None:
 
 
 def test_build_rag_user_message_includes_guards() -> None:
-    msg = build_rag_user_message("Что такое БП?", "[1] Источник: a.txt\nтекст")
+    msg = build_rag_user_message("Что такое БП?", "[1] Документ: «a.txt»\nтекст")
     assert "только на фрагменты" in msg or "только на" in msg
     assert "Что такое БП?" in msg
     assert "a.txt" in msg

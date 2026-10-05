@@ -96,6 +96,8 @@ docker compose --profile frontend down
 
 Подробнее: [`data/knowledge_sources/README.md`](data/knowledge_sources/README.md).
 
+Загрузка, конвертация и импорт также доступны в веб-админке `http://localhost:8080/admin/` (нужен `ADMIN_PASSWORD` в `.env`) — см. [`docs/admin.md`](docs/admin.md).
+
 ---
 
 ## Встраивание виджета
@@ -142,6 +144,7 @@ export PYTHONPATH="$(pwd)"
 | [`docs/docker.md`](docs/docker.md) | Compose, volumes, типичные проблемы |
 | [`docs/widget.md`](docs/widget.md) | Сборка и встраивание виджета |
 | [`docs/api-testing.md`](docs/api-testing.md) | curl / pytest, авторизация GigaChat |
+| [`docs/admin.md`](docs/admin.md) | Админка базы знаний: настройка, API, безопасность |
 | [`config/system_prompt.md`](config/system_prompt.md) | Поведение ассистента |
 
 ---
@@ -149,8 +152,9 @@ export PYTHONPATH="$(pwd)"
 ## Архитектура (кратко)
 
 ```
-apps/api          — FastAPI (chat, session, health)
-apps/widget       — Vue-виджет (IIFE для встраивания)
+apps/api          — FastAPI (chat, session, health, admin)
+apps/widget       — Vue-виджет (IIFE для встраивания) + nginx
+apps/admin        — Vue-админка базы знаний (/admin/)
 packages/*        — RAG, knowledge, ETL, GigaChat, security
 config/           — системный промпт, CA-сертификаты
 data/knowledge/   — тексты для индексации

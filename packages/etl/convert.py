@@ -19,6 +19,14 @@ class ConvertResult:
     message: str = ""
 
 
+SERVICE_FILE_STEMS = {"readme"}
+
+
+def is_service_file(path: Path) -> bool:
+    """Folder documentation (README.*) is not knowledge and must not be indexed."""
+    return path.stem.lower() in SERVICE_FILE_STEMS
+
+
 def _build_output_path(source: Path, sources_root: Path, output_root: Path) -> Path:
     relative = source.relative_to(sources_root)
     return output_root / relative.with_suffix(".txt")
@@ -52,8 +60,10 @@ def convert_file(
     output_root: Path,
     *,
     force: bool = False,
+    output: Path | None = None,
 ) -> ConvertResult:
-    output = _build_output_path(source, sources_root, output_root)
+    """Convert ``source`` to text; ``output`` overrides the mirrored path (e.g. a renamed .txt)."""
+    output = output or _build_output_path(source, sources_root, output_root)
     output.parent.mkdir(parents=True, exist_ok=True)
 
     if (
@@ -151,7 +161,7 @@ def convert_sources(
     for path in sorted(sources_root.rglob("*")):
         if not path.is_file():
             continue
-        if path.name.startswith("."):
+        if path.name.startswith(".") or is_service_file(path):
             continue
         if path.suffix.lower() not in SUPPORTED_EXTENSIONS:
             continue

@@ -140,21 +140,26 @@ async def _stream_answer(
     session_store: SessionStore,
 ) -> AsyncGenerator[str, None]:
     full_answer = ""
+    sources: list[dict] = []
+
+    async def relay(pipeline: RAGPipeline) -> AsyncGenerator[str, None]:
+        nonlocal full_answer, sources
+        async for item in pipeline.astream_query(message, history=history):
+            if isinstance(item, dict):
+                sources = item.get("sources", [])
+                continue
+            full_answer += item
+            yield f"data: {json.dumps({'token': item}, ensure_ascii=False)}\n\n"
+
     try:
         try:
-            stream = rag.astream_query(message, history=history)
-            async for token in stream:
-                full_answer += token
-                payload = json.dumps({"token": token}, ensure_ascii=False)
-                yield f"data: {payload}\n\n"
+            async for event in relay(rag):
+                yield event
         except Exception as exc:
             if not is_gigachat_auth_error(exc) or full_answer:
                 raise
-            rag = _refresh_gigachat_clients()
-            async for token in rag.astream_query(message, history=history):
-                full_answer += token
-                payload = json.dumps({"token": token}, ensure_ascii=False)
-                yield f"data: {payload}\n\n"
+            async for event in relay(_refresh_gigachat_clients()):
+                yield event
     except Exception as exc:
         error_payload = json.dumps({"error": str(exc)}, ensure_ascii=False)
         yield f"data: {error_payload}\n\n"
@@ -162,7 +167,8 @@ async def _stream_answer(
 
     session_store.add_message(session.session_id, "user", message)
     session_store.add_message(session.session_id, "assistant", full_answer)
-    yield f"data: {json.dumps({'done': True, 'session_id': session.session_id}, ensure_ascii=False)}\n\n"
+    done_payload = {"done": True, "session_id": session.session_id, "sources": sources}
+    yield f"data: {json.dumps(done_payload, ensure_ascii=False)}\n\n"
 
 
 @router.delete("/session")

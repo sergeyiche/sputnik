@@ -9,6 +9,8 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
 from packages.knowledge.base import RetrievedChunk, VectorStore
+from packages.knowledge.sources import SourceCatalog
+from packages.rag.citations import normalize_citations, strip_citations
 from packages.rag.prompts import (
     build_rag_user_message,
     get_system_prompt,
@@ -41,26 +43,60 @@ class RAGPipeline:
         llm: BaseChatModel,
         vector_store: VectorStore,
         top_k: int = 5,
+        source_catalog: SourceCatalog | None = None,
     ) -> None:
         self._llm = llm
         self._vector_store = vector_store
         self._top_k = top_k
+        self._source_catalog = source_catalog
+
+    def _describe_source(self, document: str) -> dict:
+        if self._source_catalog is None:
+            return {"source": document, "title": document.rsplit(".", 1)[0], "url": None}
+        return self._source_catalog.describe(document)
+
+    def _is_hidden(self, document: str) -> bool:
+        return self._source_catalog is not None and self._source_catalog.resolve(document).hidden
+
+    @staticmethod
+    def _document_numbers(chunks: list[RetrievedChunk]) -> dict[str, int]:
+        """Number documents (not chunks) in order of first appearance."""
+        numbers: dict[str, int] = {}
+        for chunk in chunks:
+            numbers.setdefault(chunk.source, len(numbers) + 1)
+        return numbers
 
     def _format_context(self, chunks: list[RetrievedChunk]) -> str:
+        numbers = self._document_numbers(chunks)
+        by_document: dict[str, list[str]] = {}
+        for chunk in chunks:
+            by_document.setdefault(chunk.source, []).append(chunk.content.strip())
+
         parts: list[str] = []
-        for i, chunk in enumerate(chunks, start=1):
-            parts.append(f"[{i}] Источник: {chunk.source}\n{chunk.content}")
+        for document, number in numbers.items():
+            title = self._describe_source(document)["title"]
+            body = "\n…\n".join(by_document[document])
+            parts.append(f"[{number}] Документ: «{title}»\n{body}")
         return "\n\n".join(parts)
 
-    def _build_sources(self, chunks: list[RetrievedChunk]) -> list[dict]:
-        seen: set[str] = set()
-        sources: list[dict] = []
+    def _finalize_answer(self, answer: str, chunks: list[RetrievedChunk]) -> tuple[str, list[dict]]:
+        """Normalize citations and return only the sources actually cited in the answer."""
+        numbers = self._document_numbers(chunks)
+        visible = {doc: n for doc, n in numbers.items() if not self._is_hidden(doc)}
+        cleaned, cited = normalize_citations(answer, set(visible.values()))
+
+        best_score: dict[str, float | None] = {}
         for chunk in chunks:
-            if chunk.source in seen:
-                continue
-            seen.add(chunk.source)
-            sources.append({"source": chunk.source, "score": chunk.score})
-        return sources
+            current = best_score.get(chunk.source)
+            if current is None or (chunk.score is not None and chunk.score < current):
+                best_score[chunk.source] = chunk.score
+
+        by_number = {n: doc for doc, n in visible.items()}
+        sources = [
+            {"index": number, **self._describe_source(by_number[number]), "score": best_score.get(by_number[number])}
+            for number in sorted(cited)
+        ]
+        return cleaned, sources
 
     def _retrieval_query(self, question: str, history: list[dict[str, str]] | None) -> str:
         """Enrich short follow-ups with the previous user turn for better search."""
@@ -125,7 +161,7 @@ class RAGPipeline:
             if msg["role"] == "user":
                 messages.append(HumanMessage(content=content))
             elif msg["role"] == "assistant":
-                messages.append(AIMessage(content=strip_trailing_disclaimer(content)))
+                messages.append(AIMessage(content=strip_citations(strip_trailing_disclaimer(content))))
         return messages
 
     def _build_messages(
@@ -164,10 +200,11 @@ class RAGPipeline:
 
         response = self._llm.invoke(self._build_messages(question, chunks, history))
         answer_text = response.content if isinstance(response.content, str) else str(response.content)
+        answer_text, sources = self._finalize_answer(answer_text, chunks)
 
         return RAGResponse(
             answer=append_disclaimer(answer_text),
-            sources=self._build_sources(chunks),
+            sources=sources,
             chunks_used=len(chunks),
         )
 
@@ -176,7 +213,10 @@ class RAGPipeline:
         question: str,
         history: list[dict[str, str]] | None = None,
     ):
-        """Async generator yielding text tokens for SSE streaming."""
+        """Async generator for SSE: yields text tokens, then a final ``{"sources": [...]}`` dict.
+
+        Tokens are sent as generated, so citation markers are not normalized in the stream.
+        """
         if is_suspicious_query(question):
             yield append_disclaimer(SUSPICIOUS_ANSWER)
             return
@@ -187,8 +227,13 @@ class RAGPipeline:
             yield append_disclaimer(NO_CONTEXT_ANSWER)
             return
 
-        async for chunk in self._llm.astream(self._build_messages(question, chunks, history)):
-            if chunk.content:
-                yield chunk.content if isinstance(chunk.content, str) else str(chunk.content)
+        full_text = ""
+        async for token in self._llm.astream(self._build_messages(question, chunks, history)):
+            if token.content:
+                text = token.content if isinstance(token.content, str) else str(token.content)
+                full_text += text
+                yield text
 
         yield f"\n\n---\n{MEDICAL_DISCLAIMER}"
+        _, sources = self._finalize_answer(full_text, chunks)
+        yield {"sources": sources}

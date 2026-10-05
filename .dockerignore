@@ -21,6 +21,7 @@ __pycache__
 *.egg-info
 **/node_modules
 apps/widget/dist
+apps/admin/dist
 
 # Local caches and runtime data (mounted as volumes)
 data/chroma

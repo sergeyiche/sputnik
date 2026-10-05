@@ -69,7 +69,13 @@ data/knowledge_sources/  →  convert  →  data/knowledge/*.txt  →  ingest  �
 curl -s http://localhost:8000/v1/knowledge/status | python3 -m json.tool
 ```
 
-Ожидаем `chunk_count > 0`.
+Ожидаем `chunk_count > 0`, в поле `documents` — список проиндексированных файлов.
+
+Стартовые вопросы-подсказки виджета (случайные из `config/starter_questions.json`, файл перечитывается при изменении — перезапуск не нужен):
+
+```bash
+curl -s "http://localhost:8000/v1/suggestions/starter?count=3" | python3 -m json.tool
+```
 
 ### 5. Запуск API
 

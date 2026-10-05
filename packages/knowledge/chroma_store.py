@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -11,22 +13,47 @@ from langchain_core.embeddings import Embeddings
 
 from packages.knowledge.base import RetrievedChunk, VectorStore
 
+logger = logging.getLogger(__name__)
 
-def _create_chroma_client(persist_directory: str) -> chromadb.ClientAPI:
-    """Create a persistent Chroma client.
+_clients: dict[str, chromadb.ClientAPI] = {}
+_clients_lock = threading.Lock()
 
-    Clears SharedSystemClient cache first — stale/broken RustBindingsAPI
-    instances in the process cause: AttributeError: no attribute 'bindings'.
+
+def get_chroma_client(persist_directory: str) -> chromadb.ClientAPI:
+    """Return one persistent client per directory for the whole process.
+
+    The SharedSystemClient cache is cleared only before the first client is
+    created — stale RustBindingsAPI instances cause
+    ``AttributeError: no attribute 'bindings'``, while clearing it later would
+    break clients already in use (e.g. by a running import).
     """
     path = Path(persist_directory)
-    path.mkdir(parents=True, exist_ok=True)
+    key = str(path.resolve())
+    with _clients_lock:
+        client = _clients.get(key)
+        if client is not None:
+            return client
 
-    try:
-        chromadb.api.client.SharedSystemClient.clear_system_cache()
-    except Exception:
-        pass
+        path.mkdir(parents=True, exist_ok=True)
+        if not _clients:
+            try:
+                chromadb.api.client.SharedSystemClient.clear_system_cache()
+            except Exception:
+                pass
+        client = chromadb.PersistentClient(path=str(path))
+        _clients[key] = client
+        return client
 
-    return chromadb.PersistentClient(path=str(path))
+
+def replace_collection(persist_directory: str, staging_name: str, target_name: str) -> None:
+    """Atomically-enough swap: drop ``target_name`` and rename ``staging_name`` to it."""
+    client = get_chroma_client(persist_directory)
+    staging = client.get_collection(staging_name)
+    existing = {c.name for c in client.list_collections()}
+    if target_name in existing:
+        client.delete_collection(target_name)
+    staging.modify(name=target_name)
+    logger.info("Chroma collection %s replaced by %s", target_name, staging_name)
 
 
 class ChromaVectorStore(VectorStore):
@@ -36,7 +63,7 @@ class ChromaVectorStore(VectorStore):
         persist_directory: str,
         collection_name: str,
     ) -> None:
-        client = _create_chroma_client(persist_directory)
+        client = get_chroma_client(persist_directory)
         self._store = Chroma(
             client=client,
             collection_name=collection_name,
