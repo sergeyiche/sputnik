@@ -1,4 +1,4 @@
-"""Admin API: knowledge base files, conversion and full import."""
+"""Admin API: knowledge base files, conversion, full import and the system prompt."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from apps.api.app.deps import (
     get_admin_auth,
     get_ingest_runner,
     get_knowledge_files_service,
+    get_system_prompt_store,
     get_vector_store,
 )
 from packages.admin.ingest_jobs import IngestAlreadyRunningError, IngestJobRunner
@@ -24,6 +25,14 @@ from packages.admin.knowledge_files import (
     InvalidFileError,
     KnowledgeFilesService,
 )
+from packages.admin.prompt_store import (
+    PromptSnapshot,
+    PromptUnchangedError,
+    PromptValidationError,
+    PromptVersionNotFoundError,
+    SystemPromptStore,
+)
+from packages.rag.prompts import reload_system_prompt
 from packages.etl.convert import ConvertResult
 from packages.etl.converters import SUPPORTED_EXTENSIONS
 from packages.knowledge.base import VectorStore
@@ -300,3 +309,93 @@ def start_ingest(runner: IngestJobRunner = Depends(get_ingest_runner)) -> Ingest
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     logger.info("Admin started full import")
     return IngestStateResponse(**state.to_dict())
+
+
+# --- system prompt ---------------------------------------------------------------------
+
+
+class PromptVersionItem(BaseModel):
+    id: str
+    created_at: datetime
+    note: str
+    content: str
+    active: bool
+
+
+class PromptStateResponse(BaseModel):
+    content: str
+    mode: str
+    active_version_id: str | None
+    default_content: str
+    versions: list[PromptVersionItem]
+
+
+class SavePromptRequest(BaseModel):
+    content: str = Field(..., min_length=1, max_length=20_000)
+    note: str = Field(default="", max_length=200)
+
+
+class ActivatePromptRequest(BaseModel):
+    version_id: str = Field(..., min_length=1, max_length=64)
+
+
+def _prompt_response(snapshot: PromptSnapshot) -> PromptStateResponse:
+    return PromptStateResponse(
+        content=snapshot.content,
+        mode=snapshot.mode,
+        active_version_id=snapshot.active_version_id,
+        default_content=snapshot.default_content,
+        versions=[
+            PromptVersionItem(
+                id=item.id,
+                created_at=item.created_at,
+                note=item.note,
+                content=item.content,
+                active=item.id == snapshot.active_version_id,
+            )
+            for item in snapshot.versions
+        ],
+    )
+
+
+def _apply_prompt(store: SystemPromptStore, snapshot: PromptSnapshot) -> PromptStateResponse:
+    """Publish the new active text to the process that answers chat requests."""
+    store.invalidate_cache()
+    reload_system_prompt()
+    return _prompt_response(snapshot)
+
+
+@router.get("/prompt", response_model=PromptStateResponse, dependencies=[Depends(require_admin)])
+def get_prompt(store: SystemPromptStore = Depends(get_system_prompt_store)) -> PromptStateResponse:
+    return _prompt_response(store.snapshot())
+
+
+@router.put("/prompt", response_model=PromptStateResponse, dependencies=[Depends(require_admin)])
+def save_prompt(
+    payload: SavePromptRequest,
+    store: SystemPromptStore = Depends(get_system_prompt_store),
+) -> PromptStateResponse:
+    try:
+        snapshot = store.save(payload.content, payload.note)
+    except PromptUnchangedError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    except PromptValidationError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    return _apply_prompt(store, snapshot)
+
+
+@router.post("/prompt/activate", response_model=PromptStateResponse, dependencies=[Depends(require_admin)])
+def activate_prompt(
+    payload: ActivatePromptRequest,
+    store: SystemPromptStore = Depends(get_system_prompt_store),
+) -> PromptStateResponse:
+    try:
+        snapshot = store.activate(payload.version_id)
+    except PromptVersionNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    return _apply_prompt(store, snapshot)
+
+
+@router.post("/prompt/restore-default", response_model=PromptStateResponse, dependencies=[Depends(require_admin)])
+def restore_default_prompt(store: SystemPromptStore = Depends(get_system_prompt_store)) -> PromptStateResponse:
+    return _apply_prompt(store, store.restore_default())

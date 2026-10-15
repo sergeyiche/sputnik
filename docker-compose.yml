@@ -15,6 +15,7 @@ services:
       KNOWLEDGE_DIR: /app/data/knowledge
       KNOWLEDGE_SOURCES_DIR: /app/data/knowledge_sources
       SYSTEM_PROMPT_PATH: /app/config/system_prompt.md
+      PROMPT_VERSIONS_DIR: /app/data/prompts
       STARTER_QUESTIONS_PATH: /app/config/starter_questions.json
       KNOWLEDGE_SOURCES_MANIFEST: /app/config/knowledge_sources.json
       GIGACHAT_CA_BUNDLE_FILE: /app/config/certs/gigachat-ca-bundle.pem
@@ -31,8 +32,9 @@ services:
       # Код API и packages — без rebuild при правках
       - ./apps/api:/app/apps/api
       - ./packages:/app/packages
-      # Промпт и сертификаты
+      # Промпт по умолчанию, версии из админки и сертификаты
       - ./config:/app/config
+      - ./data/prompts:/app/data/prompts
       # Кеш моделей embeddings
       - hf_cache:/app/.cache
     healthcheck:

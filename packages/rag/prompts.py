@@ -8,7 +8,8 @@ from pathlib import Path
 
 DEFAULT_SYSTEM_PROMPT = """\
 Ты — «Спутник», информационный ассистент фонда «Движение — жизнь» для людей с болезнью Паркинсона и их близких.
-Ты не врач. Отвечай только по переданному контексту из базы знаний; если данных мало — скажи об этом.
+Ты не врач. Сначала отвечай по переданному контексту из базы знаний.
+Если в контексте нет достаточных сведений — и только тогда — используй устоявшиеся авторитетные сведения модели, а если и их мало — общеизвестные публичные сведения, явно отделив их от материалов фонда. Новые ссылки не добавляй и не пиши, что поиск в интернете только что выполнен.
 Не ставь диагнозы и не назначай лечение. Пиши просто и бережно. Язык — как у вопроса (русский по умолчанию).
 """
 
@@ -16,10 +17,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_PROMPT_PATH = PROJECT_ROOT / "config" / "system_prompt.md"
 
 USER_RAG_INSTRUCTIONS = """\
-Ответь на вопрос пользователя, опираясь только на фрагменты контекста ниже.
-- Используй лишь те фрагменты, которые реально относятся к вопросу; остальное игнорируй.
-- Если релевантных фактов недостаточно — честно скажи об этом и предложи обратиться к специалисту.
-- Не добавляй факты, которых нет в контексте.
+Ответь на вопрос пользователя.
+- Сначала опирайся на фрагменты контекста ниже. Используй лишь те, которые реально относятся к вопросу; остальное игнорируй.
+- Если в контексте недостаточно сведений для ответа — и только тогда — дополни ответ устоявшимися авторитетными сведениями модели. Если и их недостаточно, можно опереться на общеизвестные публичные сведения. Явно отдели эту часть от материалов фонда. Не пиши, что поиск в интернете только что выполнен, и не добавляй новые ссылки.
+- Не выдавай сведения вне контекста за цитату из базы знаний и не ставь на них номера документов.
+- Если контекст пуст или не по теме, не выдумывай, что он что-то содержит.
 - Каждый документ в контексте помечен номером: [1], [2]… После утверждения, взятого из документа,
   ставь его номер в квадратных скобках перед точкой: «…лучше вставать медленно [2].»
   Несколько документов — «[1][3]». Не пиши слово «Источник», не перечисляй источники в конце
@@ -45,7 +47,7 @@ def _strip_markdown_preamble(text: str) -> str:
     return "\n".join(lines[i:]).strip()
 
 
-def _resolve_prompt_path() -> Path:
+def resolve_system_prompt_path() -> Path:
     env_path = os.getenv("SYSTEM_PROMPT_PATH")
     if env_path:
         return Path(env_path)
@@ -57,19 +59,27 @@ def _read_prompt_file(path: str) -> str:
     return Path(path).read_text(encoding="utf-8")
 
 
-def get_system_prompt() -> str:
-    path = _resolve_prompt_path()
-    if not path.exists():
+def read_default_system_prompt(path: Path | None = None) -> str:
+    """Body of the shipped prompt file, without the markdown preamble."""
+    prompt_path = path or resolve_system_prompt_path()
+    if not prompt_path.exists():
         return DEFAULT_SYSTEM_PROMPT
+    raw = _read_prompt_file(str(prompt_path.resolve()))
+    return _strip_markdown_preamble(raw) or DEFAULT_SYSTEM_PROMPT
 
-    raw = _read_prompt_file(str(path.resolve()))
-    cleaned = _strip_markdown_preamble(raw)
-    return cleaned or DEFAULT_SYSTEM_PROMPT
+
+def get_system_prompt() -> str:
+    from packages.admin.prompt_store import get_prompt_store
+
+    return get_prompt_store().active_text()
 
 
 def reload_system_prompt() -> str:
-    """Clear cache after prompt file edit (for future admin hot-reload)."""
+    """Drop the cached default prompt so the next answer sees the active text."""
+    from packages.admin.prompt_store import get_prompt_store
+
     _read_prompt_file.cache_clear()
+    get_prompt_store().invalidate_cache()
     return get_system_prompt()
 
 

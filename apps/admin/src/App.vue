@@ -3,13 +3,15 @@ import { onMounted, ref } from 'vue'
 import { api, setUnauthorizedHandler } from './api'
 import ImportTab from './components/ImportTab.vue'
 import LoginForm from './components/LoginForm.vue'
+import PromptTab from './components/PromptTab.vue'
 import SourcesTab from './components/SourcesTab.vue'
 
-type Tab = 'sources' | 'import'
+type Tab = 'sources' | 'import' | 'prompt'
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'sources', label: 'База знаний' },
   { id: 'import', label: 'Импорт' },
+  { id: 'prompt', label: 'Промпт' },
 ]
 
 const username = ref<string | null>(null)
@@ -70,7 +72,8 @@ onMounted(async () => {
 
     <main class="main">
       <SourcesTab v-if="activeTab === 'sources'" />
-      <ImportTab v-else />
+      <ImportTab v-else-if="activeTab === 'import'" />
+      <PromptTab v-else />
     </main>
   </div>
 </template>

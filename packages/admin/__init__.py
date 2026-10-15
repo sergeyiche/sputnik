@@ -1,1 +1,1 @@
-"""Knowledge base administration: source files, conversion and import jobs."""
+"""Knowledge base administration: source files, conversion, import jobs and the system prompt."""

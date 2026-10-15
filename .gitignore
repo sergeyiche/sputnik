@@ -36,6 +36,7 @@ apps/widget/dist/
 
 # Runtime data & caches
 data/chroma/
+data/prompts/
 data/knowledge_sources/**
 !data/knowledge_sources/README.md
 .cache/

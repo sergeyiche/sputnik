@@ -11,6 +11,8 @@ from apps.api.app import deps
 from apps.api.app.main import app
 from packages.admin.ingest_jobs import IngestJobState
 from packages.admin.knowledge_files import KnowledgeFilesService
+from packages.admin.prompt_store import reset_prompt_store
+from packages.rag.prompts import _read_prompt_file
 from packages.security.admin_auth import AdminAuthService
 
 
@@ -40,13 +42,19 @@ class FakeRunner:
 
 
 @pytest.fixture()
-def client(tmp_path: Path):
+def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     sources = tmp_path / "sources"
     knowledge = tmp_path / "knowledge"
     sources.mkdir()
     knowledge.mkdir()
     (sources / "Сон.txt").write_text("Про сон", encoding="utf-8")
     (knowledge / "Сон.txt").write_text("# source-file: Сон.txt\n\nПро сон", encoding="utf-8")
+    prompt_file = tmp_path / "system_prompt.md"
+    prompt_file.write_text("# Заголовок\n\n---\n\nТестовый промпт по умолчанию\n", encoding="utf-8")
+    monkeypatch.setenv("SYSTEM_PROMPT_PATH", str(prompt_file))
+    monkeypatch.setenv("PROMPT_VERSIONS_DIR", str(tmp_path / "prompts"))
+    reset_prompt_store()
+    _read_prompt_file.cache_clear()
 
     auth = AdminAuthService("admin", "secret")
     runner = FakeRunner()
@@ -60,6 +68,8 @@ def client(tmp_path: Path):
         yield TestClient(app)
     finally:
         app.dependency_overrides.clear()
+        reset_prompt_store()
+        _read_prompt_file.cache_clear()
 
 
 def _login(client: TestClient) -> None:
@@ -68,7 +78,12 @@ def _login(client: TestClient) -> None:
 
 
 def test_endpoints_require_login(client: TestClient) -> None:
-    for method, url in [("get", "/v1/admin/sources"), ("get", "/v1/admin/documents"), ("post", "/v1/admin/ingest")]:
+    for method, url in [
+        ("get", "/v1/admin/sources"),
+        ("get", "/v1/admin/documents"),
+        ("post", "/v1/admin/ingest"),
+        ("get", "/v1/admin/prompt"),
+    ]:
         assert getattr(client, method)(url).status_code == 401
 
 
@@ -125,6 +140,61 @@ def test_documents_and_ingest(client: TestClient) -> None:
     assert client.get("/v1/admin/ingest").json()["status"] == "idle"
     assert client.post("/v1/admin/ingest").status_code == 202
     assert client.post("/v1/admin/ingest").status_code == 409
+
+
+def test_prompt_save_activate_and_restore(client: TestClient, tmp_path: Path) -> None:
+    _login(client)
+    prompt_file = tmp_path / "system_prompt.md"
+    original = prompt_file.read_text(encoding="utf-8")
+
+    initial = client.get("/v1/admin/prompt")
+    assert initial.status_code == 200
+    body = initial.json()
+    assert body["mode"] == "default"
+    assert body["content"] == "Тестовый промпт по умолчанию"
+    assert body["active_version_id"] is None
+    assert body["versions"] == []
+
+    unchanged = client.put("/v1/admin/prompt", json={"content": body["content"]})
+    assert unchanged.status_code == 409
+
+    empty = client.put("/v1/admin/prompt", json={"content": "   "})
+    assert empty.status_code == 400
+
+    saved = client.put(
+        "/v1/admin/prompt",
+        json={"content": "Новый промпт ассистента", "note": "первая правка"},
+    )
+    assert saved.status_code == 200
+    saved_body = saved.json()
+    assert saved_body["mode"] == "version"
+    assert saved_body["content"] == "Новый промпт ассистента"
+    assert saved_body["versions"][0]["note"] == "первая правка"
+    assert saved_body["versions"][0]["active"] is True
+    first_id = saved_body["active_version_id"]
+
+    second = client.put("/v1/admin/prompt", json={"content": "Вторая версия промпта"})
+    assert second.status_code == 200
+    assert second.json()["active_version_id"] != first_id
+    assert len(second.json()["versions"]) == 2
+
+    rolled = client.post("/v1/admin/prompt/activate", json={"version_id": first_id})
+    assert rolled.status_code == 200
+    rolled_body = rolled.json()
+    assert rolled_body["content"] == "Новый промпт ассистента"
+    assert rolled_body["active_version_id"] == first_id
+    assert len(rolled_body["versions"]) == 2
+
+    assert client.post("/v1/admin/prompt/activate", json={"version_id": "missing"}).status_code == 404
+
+    restored = client.post("/v1/admin/prompt/restore-default")
+    assert restored.status_code == 200
+    restored_body = restored.json()
+    assert restored_body["mode"] == "default"
+    assert restored_body["content"] == "Тестовый промпт по умолчанию"
+    assert restored_body["active_version_id"] is None
+    assert len(restored_body["versions"]) == 2
+    assert prompt_file.read_text(encoding="utf-8") == original
 
 
 def test_logout(client: TestClient) -> None:

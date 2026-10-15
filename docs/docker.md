@@ -56,7 +56,8 @@ docker compose down
 | `./data/knowledge` | `/app/data/knowledge` | Нормализованные `.txt` |
 | `./data/knowledge_sources` | `/app/data/knowledge_sources` | Сырые PDF/DOCX |
 | `chroma_data` (named) | `/app/data/chroma` | Векторная БД (отдельный volume — без readonly sqlite) |
-| `./config` | `/app/config` | Промпт + CA-сертификаты |
+| `./config` | `/app/config` | Промпт по умолчанию + CA-сертификаты |
+| `./data/prompts` | `/app/data/prompts` | Версии системного промпта из админки |
 | `hf_cache` (named) | `/app/.cache` | Кеш HuggingFace / embeddings |
 
 > Локальный `./data/chroma` (venv) и Docker `chroma_data` — **разные** хранилища. После первого `docker compose up` обязательно: `./scripts/docker-ingest.sh`.
@@ -76,7 +77,7 @@ EMBEDDINGS_PROVIDER=local
 Compose сам выставляет:
 
 - `GIGACHAT_CA_BUNDLE_FILE=/app/config/certs/gigachat-ca-bundle.pem`
-- `CHROMA_PERSIST_DIR`, `KNOWLEDGE_DIR`, `SYSTEM_PROMPT_PATH`
+- `CHROMA_PERSIST_DIR`, `KNOWLEDGE_DIR`, `SYSTEM_PROMPT_PATH`, `PROMPT_VERSIONS_DIR`
 
 ## Разработка
 

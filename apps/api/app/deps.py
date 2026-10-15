@@ -8,6 +8,7 @@ from langchain_core.embeddings import Embeddings
 from apps.api.app.config import settings
 from packages.admin.ingest_jobs import IngestDependencies, IngestJobRunner
 from packages.admin.knowledge_files import KnowledgeFilesService
+from packages.admin.prompt_store import SystemPromptStore, get_prompt_store
 from packages.dialogue.session import SessionStore
 from packages.etl.ingest import prepare_chunks, store_chunks
 from packages.knowledge.base import VectorStore
@@ -122,6 +123,10 @@ def _chroma_dir() -> str:
 
 def _collection_name() -> str:
     return os.getenv("CHROMA_COLLECTION", "parkinson_kb")
+
+
+def get_system_prompt_store() -> SystemPromptStore:
+    return get_prompt_store()
 
 
 def get_admin_auth() -> AdminAuthService:

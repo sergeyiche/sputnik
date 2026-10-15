@@ -18,11 +18,7 @@ from packages.rag.prompts import (
 )
 from packages.security.disclaimer import MEDICAL_DISCLAIMER, append_disclaimer, is_suspicious_query
 
-NO_CONTEXT_ANSWER = (
-    "В доступных материалах фонда пока нет достаточной информации, чтобы уверенно ответить на этот вопрос. "
-    "Рекомендую уточнить его у невролога или специалиста по болезни Паркинсона. "
-    "Если хотите, переформулируйте вопрос — попробую найти ответ в других разделах."
-)
+EMPTY_CONTEXT = "Релевантных фрагментов базы знаний по этому вопросу нет."
 
 SUSPICIOUS_ANSWER = (
     "Я могу помочь только с вопросами о болезни Паркинсона и поддержке на основе материалов фонда. "
@@ -170,7 +166,7 @@ class RAGPipeline:
         chunks: list[RetrievedChunk],
         history: list[dict[str, str]] | None,
     ) -> list[BaseMessage]:
-        context = self._format_context(chunks)
+        context = self._format_context(chunks) if chunks else EMPTY_CONTEXT
         return [
             SystemMessage(content=get_system_prompt()),
             *self._history_messages(history),
@@ -190,13 +186,6 @@ class RAGPipeline:
             )
 
         chunks = self._retrieve(question, history)
-
-        if not chunks:
-            return RAGResponse(
-                answer=append_disclaimer(NO_CONTEXT_ANSWER),
-                sources=[],
-                chunks_used=0,
-            )
 
         response = self._llm.invoke(self._build_messages(question, chunks, history))
         answer_text = response.content if isinstance(response.content, str) else str(response.content)
@@ -222,10 +211,6 @@ class RAGPipeline:
             return
 
         chunks = self._retrieve(question, history)
-
-        if not chunks:
-            yield append_disclaimer(NO_CONTEXT_ANSWER)
-            return
 
         full_text = ""
         async for token in self._llm.astream(self._build_messages(question, chunks, history)):

@@ -2,6 +2,7 @@ import type {
   ConvertResultItem,
   DocumentsResponse,
   IngestState,
+  PromptState,
   SourceItem,
   SourcesResponse,
 } from './types'
@@ -78,4 +79,11 @@ export const api = {
   documents: () => request<DocumentsResponse>('/documents'),
   ingestState: () => request<IngestState>('/ingest'),
   startIngest: () => request<IngestState>('/ingest', { method: 'POST' }),
+
+  prompt: () => request<PromptState>('/prompt'),
+  savePrompt: (content: string, note: string) =>
+    request<PromptState>('/prompt', json('PUT', { content, note })),
+  activatePrompt: (versionId: string) =>
+    request<PromptState>('/prompt/activate', json('POST', { version_id: versionId })),
+  restoreDefaultPrompt: () => request<PromptState>('/prompt/restore-default', { method: 'POST' }),
 }

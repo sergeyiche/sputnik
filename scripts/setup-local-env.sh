@@ -18,6 +18,7 @@ sed -i \
   -e 's|KNOWLEDGE_DIR=/app/data/knowledge|KNOWLEDGE_DIR=./data/knowledge|' \
   -e 's|KNOWLEDGE_SOURCES_DIR=/app/data/knowledge_sources|KNOWLEDGE_SOURCES_DIR=./data/knowledge_sources|' \
   -e 's|SYSTEM_PROMPT_PATH=/app/config/system_prompt.md|SYSTEM_PROMPT_PATH=./config/system_prompt.md|' \
+  -e 's|PROMPT_VERSIONS_DIR=/app/data/prompts|PROMPT_VERSIONS_DIR=./data/prompts|' \
   "$ENV_FILE"
 
 echo "Создан $ENV_FILE"

@@ -38,6 +38,22 @@ export interface DocumentsResponse {
   chunk_count: number
 }
 
+export interface PromptVersion {
+  id: string
+  created_at: string
+  note: string
+  content: string
+  active: boolean
+}
+
+export interface PromptState {
+  content: string
+  mode: 'default' | 'version'
+  active_version_id: string | null
+  default_content: string
+  versions: PromptVersion[]
+}
+
 export interface IngestState {
   status: 'idle' | 'running' | 'succeeded' | 'failed'
   phase: 'preparing' | 'embedding' | 'swapping' | null
