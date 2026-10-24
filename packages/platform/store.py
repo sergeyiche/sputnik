@@ -20,10 +20,23 @@ DEFAULT_DISCLAIMER = (
 )
 DEFAULT_TITLE = "Спутник"
 DEFAULT_COLOR = "#fc7f03"
+_HEX = set("0123456789abcdef")
 MAX_WIDGET_TITLE = 120
 MAX_WIDGET_DESCRIPTION = 150
 MAX_DISCLAIMER = 250
 MAX_LEGAL_NOTES = 3000
+
+
+def normalize_web_color(value: str) -> str:
+    """Store a CSS hex color as ``#rrggbb``."""
+    text = value.strip().lower()
+    if text.startswith("#"):
+        text = text[1:]
+    if len(text) == 3 and all(char in _HEX for char in text):
+        text = "".join(char * 2 for char in text)
+    if len(text) != 6 or any(char not in _HEX for char in text):
+        raise PlatformError("Цвет укажите в виде #fc7f03")
+    return f"#{text}"
 
 
 class PlatformError(Exception):
@@ -363,8 +376,7 @@ class PlatformStore:
             raise PlatformError("Юридическая информация длиннее 250 символов")
         if len(legal_notes) > MAX_LEGAL_NOTES:
             raise PlatformError("Подробная юридическая информация длиннее 3000 символов")
-        if not primary_color.startswith("#") or len(primary_color) not in {4, 7}:
-            raise PlatformError("Цвет укажите в виде #fc7f03")
+        primary_color = normalize_web_color(primary_color)
         with self._lock, self._session() as conn:
             fields = [
                 title,

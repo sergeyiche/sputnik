@@ -33,7 +33,12 @@ async function copySnippet() {
   <form v-if="form" class="widget" @submit.prevent="save">
     <label>Название в шапке <input v-model="form.title" required maxlength="120" /></label>
     <label>Описание в шапке, до 150 символов <input v-model="form.description" maxlength="150" /></label>
-    <label>Цвет <input v-model="form.primary_color" required /></label>
+    <label class="color">Цветовая схема
+      <span class="color__row">
+        <input v-model="form.primary_color" type="color" required />
+        <span>{{ form.primary_color }}</span>
+      </span>
+    </label>
     <label class="check"><input v-model="form.show_sources" type="checkbox" /> Показывать источники</label>
     <label>Юридическая информация под чертой, до 250 символов
       <textarea v-model="form.disclaimer" required maxlength="250" rows="3" />
@@ -55,6 +60,15 @@ async function copySnippet() {
 .widget { display: grid; gap: 12px; max-width: 640px; }
 label { display: grid; gap: 4px; font-size: 14px; }
 input, textarea { font: inherit; padding: 8px; }
+.color__row { display: flex; align-items: center; gap: 8px; }
+input[type='color'] {
+  width: 48px;
+  height: 32px;
+  padding: 2px;
+  border: 1px solid #eadfce;
+  background: #fff;
+  cursor: pointer;
+}
 .check { display: flex; gap: 8px; align-items: center; }
 .actions { display: flex; gap: 8px; }
 .snippet { white-space: pre-wrap; background: #f6f1ea; padding: 12px; }

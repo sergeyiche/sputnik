@@ -11,7 +11,14 @@ from packages.platform.anomalies import anomaly_reasons
 from packages.platform.emails import valid_email
 from packages.platform.host import resolve_host, slug_available
 from packages.platform.passwords import hash_password, verify_password
-from packages.platform.store import EmailTakenError, InvalidSlugError, PlatformError, PlatformStore, UsageDay
+from packages.platform.store import (
+    EmailTakenError,
+    InvalidSlugError,
+    PlatformError,
+    PlatformStore,
+    UsageDay,
+    normalize_web_color,
+)
 
 
 def test_resolve_public_hosts() -> None:
@@ -85,6 +92,13 @@ def test_register_approve_and_isolate_login(tmp_path: Path) -> None:
     suspended = store.set_enabled(active.id, False)
     assert suspended.status == "suspended"
     assert store.set_enabled(active.id, True).status == "active"
+
+
+def test_web_color_normalizes_to_six_digits() -> None:
+    assert normalize_web_color("#FC7F03") == "#fc7f03"
+    assert normalize_web_color("#abc") == "#aabbcc"
+    with pytest.raises(PlatformError):
+        normalize_web_color("orange")
 
 
 def test_email_is_required(tmp_path: Path) -> None:

@@ -21,6 +21,28 @@ const disclaimer = ref(
   'Этот ассистент предоставляет общую справочную информацию и не заменяет консультацию специалиста.',
 )
 const brand = ref('#fc7f03')
+
+function colorScheme(value: string): Record<string, string> {
+  const match = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(value.trim())
+  const fallback = '#fc7f03'
+  const hex = match ? match[1] : fallback.slice(1)
+  const full = hex.length === 3 ? hex.split('').map((char) => char + char).join('') : hex
+  const rgb = [0, 2, 4].map((index) => Number.parseInt(full.slice(index, index + 2), 16))
+  const mix = (toward: number, amount: number) =>
+    rgb.map((channel) => Math.round(channel + (toward - channel) * amount))
+  const hexOf = (channels: number[]) =>
+    `#${channels.map((channel) => channel.toString(16).padStart(2, '0')).join('')}`
+  const dark = mix(0, 0.12)
+  const soft = mix(255, 0.9)
+  return {
+    '--pcw-brand': `#${full}`,
+    '--pcw-brand-dark': hexOf(dark),
+    '--pcw-brand-soft': hexOf(soft),
+    '--pcw-brand-shadow': `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, 0.45)`,
+  }
+}
+
+const brandStyle = computed(() => colorScheme(brand.value))
 const heading = ref(props.title)
 const subtitle = ref('')
 const legalNotes = ref('')
@@ -192,7 +214,7 @@ const hasMessages = computed(() => messages.value.length > 0)
 </script>
 
 <template>
-  <div class="pcw-root" aria-live="polite" :style="{ '--pcw-brand': brand }">
+  <div class="pcw-root" aria-live="polite" :style="brandStyle">
     <button
       v-if="!isOpen"
       class="pcw-launcher"
@@ -329,7 +351,6 @@ const hasMessages = computed(() => messages.value.length > 0)
         <div v-if="disclaimer || legalNotes" class="pcw-legal">
           <p v-if="disclaimer" class="pcw-disclaimer">{{ disclaimer }}</p>
           <button
-            v-if="legalNotes"
             class="pcw-legal-help"
             type="button"
             aria-label="Подробная юридическая информация"
@@ -341,7 +362,7 @@ const hasMessages = computed(() => messages.value.length > 0)
         <div v-if="legalOpen" class="pcw-legal-layer" @click.self="legalOpen = false">
           <div class="pcw-legal-card" role="dialog" aria-label="Подробная юридическая информация">
             <button class="pcw-legal-close" type="button" aria-label="Закрыть" @click="legalOpen = false">✕</button>
-            <p class="pcw-legal-card__text">{{ legalNotes }}</p>
+            <p class="pcw-legal-card__text">{{ legalNotes || 'Подробная информация пока не добавлена.' }}</p>
           </div>
         </div>
         <textarea
