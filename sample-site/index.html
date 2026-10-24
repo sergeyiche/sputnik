@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Демо — ассистент по болезни Паркинсона</title>
-  <link rel="stylesheet" href="/widget/parkinson-chat-widget.css" />
+  <link rel="stylesheet" href="/widget/sputnik.css?v=20261024c" />
   <style>
     :root {
       color-scheme: light;
@@ -80,7 +80,7 @@
       <strong>не заменяет</strong> консультацию врача.
     </div>
     <!-- <p class="hint">
-      Виджет грузится с <code>/widget/parkinson-chat-widget.js</code>.
+      Виджет грузится с <code>/widget/sputnik.js</code>.
       Запросы к API идут через nginx на тот же origin (<code>/v1/…</code>).
     </p> -->
     <div class="spacer" aria-hidden="true"></div>
@@ -88,7 +88,7 @@
   </main>
 
   <!-- api-url пустой → same origin (через nginx proxy) -->
-  <parkinson-chat-widget></parkinson-chat-widget>
-  <script src="/widget/parkinson-chat-widget.js" defer></script>
+  <sputnik-widget></sputnik-widget>
+  <script src="/widget/sputnik.js?v=20261024c" defer></script>
 </body>
 </html>

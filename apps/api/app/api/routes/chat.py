@@ -3,12 +3,13 @@ from __future__ import annotations
 import json
 from typing import AsyncGenerator
 
-from fastapi import APIRouter, Cookie, Depends, HTTPException, Response
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from apps.api.app.config import settings
-from apps.api.app.deps import get_rag_pipeline, get_session_store, reset_rag_caches
+from apps.api.app.deps import get_platform_store, get_rag_pipeline, get_session_store, reset_rag_caches
+from packages.platform.context import scope_var, tenant_var
 from packages.dialogue.session import SessionStore
 from packages.integrations.gigachat.auth import get_gigachat_auth_service
 from packages.integrations.gigachat.errors import is_gigachat_auth_error
@@ -44,12 +45,16 @@ class SessionResponse(BaseModel):
 async def chat(
     request: ChatRequest,
     response: Response,
+    http_request: Request,
     session_store: SessionStore = Depends(get_session_store),
     rag: RAGPipeline = Depends(get_rag_pipeline),
     session_id: str | None = Cookie(default=None, alias=settings.session_cookie_name),
 ):
-    session = session_store.get_or_create(session_id)
-    history = session_store.get_history(session.session_id)
+    tenant = _require_chat_tenant()
+    namespace = tenant.slug if tenant else ""
+    session_id = http_request.headers.get("x-session-id") or session_id
+    session = session_store.get_or_create(session_id, namespace=namespace)
+    history = session_store.get_history(session.session_id, namespace=namespace)
 
     response.set_cookie(
         key=settings.session_cookie_name,
@@ -77,6 +82,7 @@ async def chat(
         import logging
 
         logging.getLogger("uvicorn.error").exception("Chat failed: %s", exc)
+        _record_chat_error(tenant, exc)
         raise HTTPException(
             status_code=503,
             detail=(
@@ -87,19 +93,24 @@ async def chat(
             ),
         ) from exc
 
-    session_store.add_message(session.session_id, "user", request.message)
-    session_store.add_message(session.session_id, "assistant", result.answer)
+    session_store.add_message(session.session_id, "user", request.message, namespace=namespace)
+    session_store.add_message(session.session_id, "assistant", result.answer, namespace=namespace)
+    _record_chat_usage(tenant, result)
 
+    disclaimer = MEDICAL_DISCLAIMER
+    if tenant is not None:
+        disclaimer = get_platform_store().settings_for(tenant.id).disclaimer
     payload = ChatResponse(
         answer=result.answer,
         sources=result.sources,
         session_id=session.session_id,
+        disclaimer=disclaimer,
     )
-    # Многострочный JSON: однострочный ответ (~3KB) часто не отображается в Cursor terminal
     body = json.dumps(payload.model_dump(), ensure_ascii=False, indent=2) + "\n"
     return Response(
         content=body,
         media_type="application/json; charset=utf-8",
+        headers={"X-Session-Id": session.session_id},
     )
 
 
@@ -173,21 +184,65 @@ async def _stream_answer(
 
 @router.delete("/session")
 async def clear_session(
+    http_request: Request,
     session_store: SessionStore = Depends(get_session_store),
     session_id: str | None = Cookie(default=None, alias=settings.session_cookie_name),
 ) -> dict:
+    tenant = _require_chat_tenant()
+    namespace = tenant.slug if tenant else ""
+    session_id = http_request.headers.get("x-session-id") or session_id
     if session_id:
-        session_store.clear(session_id)
+        session_store.clear(session_id, namespace=namespace)
     return {"status": "cleared"}
 
 
 @router.get("/session", response_model=SessionResponse)
 async def get_session(
+    http_request: Request,
     session_store: SessionStore = Depends(get_session_store),
     session_id: str | None = Cookie(default=None, alias=settings.session_cookie_name),
 ) -> SessionResponse:
-    session = session_store.get_or_create(session_id)
+    tenant = _require_chat_tenant()
+    namespace = tenant.slug if tenant else ""
+    session_id = http_request.headers.get("x-session-id") or session_id
+    session = session_store.get_or_create(session_id, namespace=namespace)
     return SessionResponse(
         session_id=session.session_id,
         message_count=len(session.messages),
+    )
+
+
+def _require_chat_tenant():
+    scope = scope_var.get()
+    if scope.kind == "legacy":
+        return None
+    if scope.kind != "tenant":
+        raise HTTPException(status_code=404, detail="Ассистент доступен на поддомене организации")
+    tenant = tenant_var.get()
+    if tenant is None or tenant.status != "active":
+        raise HTTPException(status_code=404, detail="Организация не найдена или ещё не включена")
+    return tenant
+
+
+def _record_chat_usage(tenant, result) -> None:
+    if tenant is None:
+        return
+    get_platform_store().record_usage(
+        tenant.id,
+        questions=1,
+        tokens_in=result.tokens_in,
+        tokens_out=result.tokens_out,
+        empty_retrievals=1 if result.chunks_used == 0 else 0,
+    )
+
+
+def _record_chat_error(tenant, exc: Exception) -> None:
+    if tenant is None:
+        return
+    text = str(exc)
+    get_platform_store().record_usage(
+        tenant.id,
+        errors=1,
+        http_429=1 if "429" in text else 0,
+        http_402=1 if "402" in text else 0,
     )

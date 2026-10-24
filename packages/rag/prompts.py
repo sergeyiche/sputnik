@@ -14,7 +14,7 @@ DEFAULT_SYSTEM_PROMPT = """\
 """
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_PROMPT_PATH = PROJECT_ROOT / "config" / "system_prompt.md"
+DEFAULT_PROMPT_PATH = PROJECT_ROOT / "config" / "default_system_prompt.md"
 
 USER_RAG_INSTRUCTIONS = """\
 Ответь на вопрос пользователя.
@@ -30,17 +30,18 @@ USER_RAG_INSTRUCTIONS = """\
 
 
 def _strip_markdown_preamble(text: str) -> str:
-    """Remove leading title, blockquotes and horizontal rules before the prompt body."""
+    """Remove the file header. The header ends at the first ``---``.
+
+    Headings after that rule are part of the prompt. A file without a rule
+    keeps its leading title only until the first paragraph.
+    """
     lines = text.splitlines()
     i = 0
     while i < len(lines):
         stripped = lines[i].strip()
-        if (
-            not stripped
-            or stripped.startswith(">")
-            or stripped.startswith("# ")
-            or stripped == "---"
-        ):
+        if stripped == "---":
+            return "\n".join(lines[i + 1 :]).strip()
+        if not stripped or stripped.startswith(">") or stripped.startswith("# "):
             i += 1
             continue
         break
@@ -83,9 +84,15 @@ def reload_system_prompt() -> str:
     return get_system_prompt()
 
 
-def build_rag_user_message(question: str, context: str) -> str:
+def build_rag_user_message(question: str, context: str, *, cite_sources: bool = True) -> str:
+    instructions = USER_RAG_INSTRUCTIONS
+    if not cite_sources:
+        instructions += (
+            "\n- Не ставь номера документов и не перечисляй источники: "
+            "для этой организации показ источников выключен.\n"
+        )
     return (
-        f"{USER_RAG_INSTRUCTIONS}\n\n"
+        f"{instructions}\n\n"
         f"Контекст из базы знаний:\n\n{context}\n\n"
         f"Вопрос пользователя: {question}"
     )

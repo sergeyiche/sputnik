@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -20,9 +21,22 @@ from packages.security.disclaimer import MEDICAL_DISCLAIMER, append_disclaimer, 
 
 EMPTY_CONTEXT = "Релевантных фрагментов базы знаний по этому вопросу нет."
 
+
+def _token_usage(response: object) -> tuple[int, int]:
+    meta = getattr(response, "usage_metadata", None) or {}
+    if isinstance(meta, dict) and (meta.get("input_tokens") or meta.get("output_tokens")):
+        return int(meta.get("input_tokens") or 0), int(meta.get("output_tokens") or 0)
+    raw = getattr(response, "response_metadata", None) or {}
+    usage = {}
+    if isinstance(raw, dict):
+        usage = raw.get("token_usage") or raw.get("usage") or {}
+    if not isinstance(usage, dict):
+        return 0, 0
+    return int(usage.get("prompt_tokens") or 0), int(usage.get("completion_tokens") or 0)
+
 SUSPICIOUS_ANSWER = (
-    "Я могу помочь только с вопросами о болезни Паркинсона и поддержке на основе материалов фонда. "
-    "Пожалуйста, переформулируйте ваш вопрос в этой теме."
+    "Я могу помочь только с вопросами по материалам этой организации. "
+    "Пожалуйста, переформулируйте ваш вопрос."
 )
 
 
@@ -31,6 +45,8 @@ class RAGResponse:
     answer: str
     sources: list[dict]
     chunks_used: int
+    tokens_in: int = 0
+    tokens_out: int = 0
 
 
 class RAGPipeline:
@@ -40,11 +56,17 @@ class RAGPipeline:
         vector_store: VectorStore,
         top_k: int = 5,
         source_catalog: SourceCatalog | None = None,
+        prompt_text: Callable[[], str] | None = None,
+        disclaimer: str | None = None,
+        show_sources: bool = True,
     ) -> None:
         self._llm = llm
         self._vector_store = vector_store
         self._top_k = top_k
         self._source_catalog = source_catalog
+        self._prompt_text = prompt_text or get_system_prompt
+        self._disclaimer = disclaimer or MEDICAL_DISCLAIMER
+        self._show_sources = show_sources
 
     def _describe_source(self, document: str) -> dict:
         if self._source_catalog is None:
@@ -79,6 +101,8 @@ class RAGPipeline:
         """Normalize citations and return only the sources actually cited in the answer."""
         numbers = self._document_numbers(chunks)
         visible = {doc: n for doc, n in numbers.items() if not self._is_hidden(doc)}
+        if not self._show_sources:
+            return strip_citations(answer), []
         cleaned, cited = normalize_citations(answer, set(visible.values()))
 
         best_score: dict[str, float | None] = {}
@@ -168,9 +192,9 @@ class RAGPipeline:
     ) -> list[BaseMessage]:
         context = self._format_context(chunks) if chunks else EMPTY_CONTEXT
         return [
-            SystemMessage(content=get_system_prompt()),
+            SystemMessage(content=self._prompt_text()),
             *self._history_messages(history),
-            HumanMessage(content=build_rag_user_message(question, context)),
+            HumanMessage(content=build_rag_user_message(question, context, cite_sources=self._show_sources)),
         ]
 
     def query(
@@ -180,7 +204,7 @@ class RAGPipeline:
     ) -> RAGResponse:
         if is_suspicious_query(question):
             return RAGResponse(
-                answer=append_disclaimer(SUSPICIOUS_ANSWER),
+                answer=append_disclaimer(SUSPICIOUS_ANSWER, self._disclaimer),
                 sources=[],
                 chunks_used=0,
             )
@@ -190,11 +214,14 @@ class RAGPipeline:
         response = self._llm.invoke(self._build_messages(question, chunks, history))
         answer_text = response.content if isinstance(response.content, str) else str(response.content)
         answer_text, sources = self._finalize_answer(answer_text, chunks)
+        tokens_in, tokens_out = _token_usage(response)
 
         return RAGResponse(
-            answer=append_disclaimer(answer_text),
+            answer=append_disclaimer(answer_text, self._disclaimer),
             sources=sources,
             chunks_used=len(chunks),
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
         )
 
     async def astream_query(
@@ -207,7 +234,7 @@ class RAGPipeline:
         Tokens are sent as generated, so citation markers are not normalized in the stream.
         """
         if is_suspicious_query(question):
-            yield append_disclaimer(SUSPICIOUS_ANSWER)
+            yield append_disclaimer(SUSPICIOUS_ANSWER, self._disclaimer)
             return
 
         chunks = self._retrieve(question, history)
@@ -219,6 +246,6 @@ class RAGPipeline:
                 full_text += text
                 yield text
 
-        yield f"\n\n---\n{MEDICAL_DISCLAIMER}"
+        yield f"\n\n---\n{self._disclaimer}"
         _, sources = self._finalize_answer(full_text, chunks)
         yield {"sources": sources}

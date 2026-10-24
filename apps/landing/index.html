@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Спутник — ассистент на сайте организации</title>
+  <style>
+    :root { color-scheme: light; --ink: #2a241c; --muted: #6b6258; --paper: #fbf6ef; --card: #fff; --line: #eadfce; --accent: #fc7f03; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: Georgia, "Times New Roman", serif; color: var(--ink); background: var(--paper); }
+    header, main { width: min(960px, calc(100% - 32px)); margin: 0 auto; }
+    header { display: flex; justify-content: space-between; align-items: center; padding: 28px 0; }
+    .mark { font-weight: 700; letter-spacing: 0.04em; }
+    a.button, button { font-family: inherit; background: var(--accent); color: #fff; border: 0; border-radius: 999px; padding: 12px 18px; text-decoration: none; cursor: pointer; }
+    button.ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); }
+    header nav { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+    h1 { font-size: clamp(40px, 6vw, 68px); line-height: 1.05; margin: 12px 0; }
+    .lead { font-size: 22px; max-width: 640px; color: var(--muted); }
+    .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin: 36px 0; }
+    article, form { background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 18px; }
+    h2 { font-size: 20px; margin: 0 0 8px; }
+    form { display: grid; gap: 10px; margin: 12px 0 80px; }
+    label { display: grid; gap: 4px; font-size: 15px; }
+    input { font: inherit; padding: 10px; border: 1px solid var(--line); border-radius: 10px; }
+    .note { color: var(--muted); }
+    @media (max-width: 800px) {
+      .grid { grid-template-columns: 1fr; }
+      form { margin-bottom: 120px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="mark">СПУТНИК</div>
+    <nav>
+      <button class="ghost" type="button" id="ask">Спросить Спутника</button>
+      <a class="button" href="#zayavka">Оставить заявку</a>
+    </nav>
+  </header>
+  <main>
+    <p class="lead">Ассистент, который отвечает посетителям сайта по вашим материалам.</p>
+    <h1>Спокойные ответы<br />круглосуточно.</h1>
+    <p class="lead">Организация загружает свои документы. Спутник отвечает по ним на сайте и показывает, откуда взят факт.</p>
+    <div class="grid">
+      <article><h2>Меньше повторов</h2><p>Частые вопросы забирает окно на сайте, а сотрудники остаются для живого разговора.</p></article>
+      <article><h2>Ваши документы</h2><p>Ответ строится по базе организации. Если в ней нет ответа, это говорится прямо.</p></article>
+      <article><h2>Свой адрес</h2><p>После проверки у организации появляется поддомен, кабинет и короткий код для сайта.</p></article>
+    </div>
+    <div class="grid">
+      <article><h2>1. Заявка</h2><p>Напишите адрес и почту. Поддомен включается после проверки.</p></article>
+      <article><h2>2. База</h2><p>Загрузите памятки и ответы, которые можно показывать посетителям.</p></article>
+      <article><h2>3. Код</h2><p>Вставьте фрагмент на сайт. Окно Спутника появится на страницах.</p></article>
+    </div>
+    <form id="zayavka">
+      <h2>Заявка</h2>
+      <label>Название организации <input name="name" required /></label>
+      <label>Название в шапке виджета <input name="widget_title" required maxlength="120" /></label>
+      <label>Описание в шапке виджета <input name="widget_description" required maxlength="150" /></label>
+      <label>Адрес латиницей <input name="slug" required pattern="[a-z0-9][a-z0-9-]{0,30}[a-z0-9]" placeholder="mycompany" /></label>
+      <label>Почта <input name="email" type="email" required /></label>
+      <label>Пароль кабинета <input name="password" type="password" minlength="8" required /></label>
+      <button type="submit">Оставить заявку</button>
+      <p class="note" id="result">Оплата в продукте пока не подключена. Стоимость сообщим отдельно.</p>
+    </form>
+  </main>
+  <sputnik-widget></sputnik-widget>
+  <script>
+    ;(function () {
+      const apex = location.hostname.replace(/^www\./, '')
+      const origin = location.protocol + '//help.' + apex + (location.port ? ':' + location.port : '')
+      const css = document.createElement('link')
+      css.rel = 'stylesheet'
+      css.href = origin + '/widget/sputnik.css?v=20261024c'
+      document.head.appendChild(css)
+      const script = document.createElement('script')
+      script.src = origin + '/widget/sputnik.js?v=20261024c'
+      document.body.appendChild(script)
+    })()
+    document.getElementById('ask').addEventListener('click', () => {
+      window.dispatchEvent(new Event('sputnik-open'))
+    })
+    document.getElementById('zayavka').addEventListener('submit', async (event) => {
+      event.preventDefault()
+      const form = event.currentTarget
+      const body = Object.fromEntries(new FormData(form).entries())
+      const result = document.getElementById('result')
+      const response = await fetch('/v1/platform/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      const data = await response.json().catch(() => ({}))
+      result.textContent = response.ok
+        ? 'Заявка принята. Поддомен включим после проверки.'
+        : (data.detail || 'Не удалось отправить заявку')
+    })
+  </script>
+</body>
+</html>

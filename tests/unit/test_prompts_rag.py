@@ -22,6 +22,20 @@ Body line two
     assert _strip_markdown_preamble(raw).startswith("Body line one")
 
 
+def test_strip_preamble_keeps_headings_after_the_rule() -> None:
+    raw = """# Системный промпт ассистента
+
+> Промпт по умолчанию.
+
+---
+
+# РОЛЬ
+
+Ты — «Спутник».
+"""
+    assert _strip_markdown_preamble(raw).startswith("# РОЛЬ")
+
+
 def test_strip_trailing_disclaimer() -> None:
     text = "Ответ по делу.\n\n---\n⚠️ Дисклеймер длинный"
     assert strip_trailing_disclaimer(text) == "Ответ по делу."

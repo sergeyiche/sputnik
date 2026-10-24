@@ -1,26 +1,45 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { api, setUnauthorizedHandler } from './api'
 import ImportTab from './components/ImportTab.vue'
 import LoginForm from './components/LoginForm.vue'
+import PlatformConsole from './components/PlatformConsole.vue'
 import PromptTab from './components/PromptTab.vue'
 import SourcesTab from './components/SourcesTab.vue'
+import WidgetTab from './components/WidgetTab.vue'
 
-type Tab = 'sources' | 'import' | 'prompt'
+type Tab = 'sources' | 'import' | 'prompt' | 'widget'
+
+const helpHost = window.location.hostname.startsWith('help.')
+const adminAlias = window.location.hostname.startsWith('admin.')
+const area = ref<'platform' | 'cabinet'>(adminAlias ? 'platform' : 'cabinet')
+const showPlatform = computed(() => adminAlias || (helpHost && area.value === 'platform'))
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'sources', label: 'База знаний' },
   { id: 'import', label: 'Импорт' },
   { id: 'prompt', label: 'Промпт' },
+  { id: 'widget', label: 'Виджет' },
 ]
 
 const username = ref<string | null>(null)
 const checking = ref(true)
 const activeTab = ref<Tab>('sources')
+const openingReset = ref(window.location.hash.startsWith('#reset='))
 
 setUnauthorizedHandler(() => {
   username.value = null
 })
+
+function onAuthenticated(name: string) {
+  openingReset.value = false
+  username.value = name
+}
+
+function onPasswordChanged() {
+  openingReset.value = false
+  username.value = null
+}
 
 async function logout() {
   try {
@@ -42,8 +61,18 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div v-if="checking" class="boot"><span class="spinner" /></div>
-  <LoginForm v-else-if="!username" @authenticated="username = $event" />
+  <div v-if="helpHost" class="switch">
+    <button type="button" :class="{ 'is-active': area === 'platform' }" @click="area = 'platform'">Платформа</button>
+    <button type="button" :class="{ 'is-active': area === 'cabinet' }" @click="area = 'cabinet'">Кабинет help</button>
+  </div>
+  <PlatformConsole v-if="showPlatform" />
+  <div v-else-if="checking" class="boot"><span class="spinner" /></div>
+  <LoginForm
+    v-else-if="!username || openingReset"
+    @authenticated="onAuthenticated"
+    @leave-reset="openingReset = false"
+    @password-changed="onPasswordChanged"
+  />
   <div v-else class="layout">
     <header class="header">
       <div class="header__brand">
@@ -73,7 +102,8 @@ onMounted(async () => {
     <main class="main">
       <SourcesTab v-if="activeTab === 'sources'" />
       <ImportTab v-else-if="activeTab === 'import'" />
-      <PromptTab v-else />
+      <PromptTab v-else-if="activeTab === 'prompt'" />
+      <WidgetTab v-else />
     </main>
   </div>
 </template>
@@ -149,5 +179,28 @@ onMounted(async () => {
   max-width: 1200px;
   margin: 0 auto;
   padding: 24px;
+}
+
+.switch {
+  display: flex;
+  gap: 8px;
+  padding: 12px 24px;
+  background: #fff;
+  border-bottom: 1px solid var(--border);
+}
+
+.switch button {
+  font: inherit;
+  border: 1px solid var(--border);
+  background: transparent;
+  border-radius: 999px;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+
+.switch button.is-active {
+  background: var(--brand);
+  color: #fff;
+  border-color: var(--brand);
 }
 </style>

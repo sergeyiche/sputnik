@@ -1,0 +1,166 @@
+"""Host routing, registry and anomaly highlights."""
+
+from __future__ import annotations
+
+from datetime import date
+from pathlib import Path
+
+import pytest
+
+from packages.platform.anomalies import anomaly_reasons
+from packages.platform.emails import valid_email
+from packages.platform.host import resolve_host, slug_available
+from packages.platform.passwords import hash_password, verify_password
+from packages.platform.store import EmailTakenError, InvalidSlugError, PlatformError, PlatformStore, UsageDay
+
+
+def test_resolve_public_hosts() -> None:
+    assert resolve_host("spootnik.ru", "spootnik.ru").kind == "landing"
+    assert resolve_host("www.spootnik.ru:443", "spootnik.ru").kind == "landing"
+    assert resolve_host("admin.spootnik.ru", "spootnik.ru").kind == "platform_admin"
+    scope = resolve_host("help.spootnik.ru", "spootnik.ru")
+    assert scope.kind == "tenant" and scope.slug == "help"
+    assert resolve_host("testclient", "spootnik.ru").kind == "legacy"
+    assert resolve_host("acme.localhost", "spootnik.ru").slug == "acme"
+    assert resolve_host("evil.example", "spootnik.ru").kind == "unknown"
+
+
+def test_reserved_slug_cannot_be_registered() -> None:
+    assert slug_available("fond")
+    assert not slug_available("help")
+    assert not slug_available("Admin")
+
+
+def test_register_approve_and_isolate_login(tmp_path: Path) -> None:
+    store = PlatformStore(tmp_path / "platform.db")
+    with pytest.raises(InvalidSlugError):
+        store.register(slug="help", name="Спутник", email="a@b.c", password="secret123")
+
+    pending = store.register(slug="acme", name="Фонд А", email="owner@acme.org", password="secret123")
+    assert pending.status == "pending"
+    assert store.authenticate("owner@acme.org", "secret123").status == "pending"
+    assert store.authenticate("owner@acme.org", "nope") is None
+
+    with pytest.raises(EmailTakenError):
+        store.register(slug="other", name="Б", email="owner@acme.org", password="secret123")
+
+    active = store.approve(pending.id, "/data/tenants/acme/prompt_default.md")
+    assert active.status == "active"
+    assert active.collection_name == "tenant_acme"
+    settings = store.settings_for(active.id)
+    assert settings.show_sources is True
+    assert settings.disclaimer
+    assert settings.title == "Спутник"
+
+    named = store.register(
+        slug="named",
+        name="Фонд Б",
+        email="owner@named.org",
+        password="secret123",
+        widget_title="Навигатор",
+        widget_description="Ответы по материалам фонда",
+    )
+    named_settings = store.settings_for(named.id)
+    assert named_settings.title == "Навигатор"
+    assert named_settings.description == "Ответы по материалам фонда"
+    with pytest.raises(PlatformError):
+        store.register(
+            slug="long",
+            name="Фонд В",
+            email="owner@long.org",
+            password="secret123",
+            widget_description="я" * 151,
+        )
+    with pytest.raises(PlatformError):
+        store.update_settings(
+            named.id,
+            title="Навигатор",
+            description="Ответы по материалам фонда",
+            primary_color="#fc7f03",
+            show_sources=True,
+            disclaimer="ю" * 251,
+            legal_notes="",
+        )
+
+    suspended = store.set_enabled(active.id, False)
+    assert suspended.status == "suspended"
+    assert store.set_enabled(active.id, True).status == "active"
+
+
+def test_email_is_required(tmp_path: Path) -> None:
+    store = PlatformStore(tmp_path / "platform.db")
+    assert valid_email("owner@acme.org")
+    assert not valid_email("help")
+    assert not valid_email("")
+    with pytest.raises(PlatformError):
+        store.register(slug="acme", name="Фонд А", email="help", password="secret123")
+
+
+def test_missing_email_is_filled(tmp_path: Path) -> None:
+    path = tmp_path / "platform.db"
+    store = PlatformStore(path)
+    store.register(slug="acme", name="Фонд А", email="owner@acme.org", password="secret123")
+    import sqlite3
+
+    conn = sqlite3.connect(path)
+    conn.execute("UPDATE users SET email = 'help'")
+    conn.commit()
+    conn.close()
+
+    reopened = PlatformStore(path)
+    tenant = reopened.get_by_slug("acme")
+    assert tenant is not None
+    assert tenant.email == "acme@spootnik.local"
+
+
+def test_password_reset_is_single_use(tmp_path: Path) -> None:
+    store = PlatformStore(tmp_path / "platform.db")
+    tenant = store.register(slug="acme", name="Фонд А", email="owner@acme.org", password="secret123")
+    other = store.register(slug="beta", name="Б", email="owner@beta.org", password="secret123")
+    assert store.issue_password_reset("owner@beta.org", tenant_id=tenant.id, ttl_seconds=60) is None
+    assert store.issue_password_reset("missing@acme.org", tenant_id=tenant.id, ttl_seconds=60) is None
+
+    issued = store.issue_password_reset("owner@acme.org", tenant_id=tenant.id, ttl_seconds=60)
+    assert issued is not None and issued.slug == "acme"
+    again = store.issue_password_reset("owner@acme.org", tenant_id=tenant.id, ttl_seconds=60)
+    assert again is not None
+    with pytest.raises(PlatformError):
+        store.reset_password(issued.token, "new-secret")
+
+    updated = store.reset_password(again.token, "new-secret")
+    assert updated.id == tenant.id
+    assert store.authenticate("owner@acme.org", "secret123") is None
+    assert store.authenticate("owner@acme.org", "new-secret") is not None
+    with pytest.raises(PlatformError):
+        store.reset_password(again.token, "another-one")
+    assert other.email == "owner@beta.org"
+
+
+def test_password_roundtrip() -> None:
+    stored = hash_password("secret123")
+    assert verify_password("secret123", stored)
+    assert not verify_password("secret124", stored)
+
+
+def test_usage_and_anomaly(tmp_path: Path) -> None:
+    store = PlatformStore(tmp_path / "platform.db")
+    tenant = store.register(slug="acme", name="Фонд А", email="owner@acme.org", password="secret123")
+    start = date(2026, 10, 1)
+    for offset in range(7):
+        store.record_usage(tenant.id, questions=2, tokens_in=100, tokens_out=50, day=date(2026, 10, offset + 1))
+    store.record_usage(
+        tenant.id,
+        questions=30,
+        tokens_in=1000,
+        tokens_out=1000,
+        empty_retrievals=20,
+        errors=1,
+        day=date(2026, 10, 9),
+    )
+    days = store.usage_between(tenant.id, start, date(2026, 10, 9))
+    today = days[-1]
+    reasons = anomaly_reasons(today, days[:-1], disk_bytes=10)
+    assert "Всплеск вопросов или токенов" in reasons
+    assert "Больше половины ответов без базы знаний" in reasons
+    assert "Есть ошибки модели" in reasons
+    assert anomaly_reasons(UsageDay("2026-10-09", 3, 10, 10, 0, 0, 0, 0), [], 10) == []

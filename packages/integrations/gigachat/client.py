@@ -77,6 +77,11 @@ class GigaChatClient:
 
         return response
 
+    def balance(self) -> dict[str, Any]:
+        """Remaining prepaid tokens. Freemium and pay-as-you-go may answer 403."""
+        response = self._request("GET", "/balance")
+        return response.json()
+
     def list_models(self) -> dict[str, Any]:
         """First authenticated request — list available models."""
         response = self._request("GET", "/models")

@@ -7,8 +7,12 @@ export default defineConfig({
   server: {
     host: '0.0.0.0',
     port: 5174,
+    allowedHosts: ['.spootnik.local'],
     proxy: {
-      '/v1': process.env.VITE_API_PROXY || 'http://localhost:8000',
+      '/v1': {
+        target: process.env.VITE_API_PROXY || 'http://localhost:8000',
+        changeOrigin: false,
+      },
     },
   },
 })

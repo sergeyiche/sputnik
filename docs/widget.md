@@ -29,22 +29,22 @@
 cd apps/widget
 npm install
 npm run build
-# → dist/parkinson-chat-widget.js
-# → dist/parkinson-chat-widget.css
+# → dist/sputnik.js
+# → dist/sputnik.css
 ```
 
 ## Встраивание на сайт
 
 ```html
-<link rel="stylesheet" href="https://your.cdn/widget/parkinson-chat-widget.css" />
-<script src="https://your.cdn/widget/parkinson-chat-widget.js" defer></script>
-<parkinson-chat-widget api-url="https://your-api.example.com"></parkinson-chat-widget>
+<link rel="stylesheet" href="https://your.cdn/widget/sputnik.css" />
+<script src="https://your.cdn/widget/sputnik.js" defer></script>
+<sputnik-widget></sputnik-widget>
 ```
 
 | Атрибут | По умолчанию | Описание |
 |---------|--------------|----------|
 | `api-url` | `""` (= `window.location.origin`) | Базовый URL API без слэша в конце |
-| `title` | «Ассистент по болезни Паркинсона» | Заголовок панели |
+| `title` | «Спутник» | Заголовок, пока не загрузился `GET /v1/widget/config`. Название и описание шапки задаются в заявке и правятся во вкладке «Виджет» |
 | `placeholder` | … | Placeholder поля ввода |
 
 Программный mount:
@@ -66,7 +66,7 @@ window.ParkinsonChatWidget.mount(document.querySelector('#chat'), {
 
 ## Архитектура
 
-- Entry prod: `src/embed.ts` → IIFE `parkinson-chat-widget.js`
+- Entry prod: `src/embed.ts` → IIFE `sputnik.js`
 - Entry dev: `src/main.ts` + `index.html`
 - UI: `src/components/FloatingChat.vue`
-- API: `POST /v1/chat` (`stream: false`), `DELETE /v1/session`, `credentials: 'include'`
+- API: `POST /v1/chat` (`stream: false`), `DELETE /v1/session`, заголовок `X-Session-Id`

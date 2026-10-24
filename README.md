@@ -103,15 +103,15 @@ docker compose --profile frontend down
 ## Встраивание виджета
 
 ```html
-<link rel="stylesheet" href="/widget/parkinson-chat-widget.css" />
-<script src="/widget/parkinson-chat-widget.js" defer></script>
-<parkinson-chat-widget></parkinson-chat-widget>
+<link rel="stylesheet" href="https://mycompany.spootnik.ru/widget/sputnik.css" />
+<script src="https://mycompany.spootnik.ru/widget/sputnik.js" defer></script>
+<sputnik-widget></sputnik-widget>
 ```
 
 Пустой `api-url` = same origin (удобно за nginx-прокси к API). Иначе:
 
 ```html
-<parkinson-chat-widget api-url="https://your-api.example.com"></parkinson-chat-widget>
+<sputnik-widget></sputnik-widget>
 ```
 
 ---
@@ -145,7 +145,8 @@ export PYTHONPATH="$(pwd)"
 | [`docs/widget.md`](docs/widget.md) | Сборка и встраивание виджета |
 | [`docs/api-testing.md`](docs/api-testing.md) | curl / pytest, авторизация GigaChat |
 | [`docs/admin.md`](docs/admin.md) | Админка базы знаний: настройка, API, безопасность |
-| [`config/system_prompt.md`](config/system_prompt.md) | Поведение ассистента |
+| [`docs/multitenancy.md`](docs/multitenancy.md) | Организации, поддомены, изоляция данных |
+| [`config/default_system_prompt.md`](config/default_system_prompt.md) | Нейтральный промпт новой организации |
 
 ---
 

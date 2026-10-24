@@ -12,9 +12,21 @@ ADMIN_PASSWORD=<длинный случайный пароль>
 ADMIN_SESSION_TTL_MINUTES=480
 ADMIN_COOKIE_SECURE=false   # true, когда сайт работает по HTTPS
 ADMIN_MAX_UPLOAD_MB=50
+
+# Письма: smtp (локальный Mailcatcher) или mailtrap
+MAIL_TRANSPORT=smtp
+SMTP_HOST=127.0.0.1
+SMTP_PORT=1025
+MAILTRAP_API_KEY=
+MAILTRAP_USE_SANDBOX=true
+MAILTRAP_INBOX_ID=
+MAILTRAP_SENDER_EMAIL=noreply@spootnik.ru
+MAILTRAP_SENDER_NAME=Спутник
+PASSWORD_RESET_TTL_MINUTES=60
 ```
 
 Пустой `ADMIN_PASSWORD` — админка выключена, все `/v1/admin/*` отвечают `503`.
+При `MAIL_TRANSPORT=smtp` письма видны в Mailcatcher: `http://localhost:1080`. Для облака Mailtrap задайте `MAIL_TRANSPORT=mailtrap`, `MAILTRAP_API_KEY` и, в песочнице, `MAILTRAP_INBOX_ID`. Без настроенной отправки ссылка для пароля отвечает `503`.
 После изменения `.env` пересоздайте API: `docker compose up -d --force-recreate api`.
 
 Сгенерировать пароль: `python3 -c "import secrets; print(secrets.token_urlsafe(18))"`.
@@ -36,7 +48,7 @@ ADMIN_MAX_UPLOAD_MB=50
 
 - Редактор показывает текст, который сейчас видит модель. Сохранение создаёт новую версию и сразу делает её активной; перезапуск API не нужен.
 - Повтор того же текста версию не создаёт. История не перезаписывается: старую версию можно открыть и снова сделать текущей.
-- **Восстановить промпт по умолчанию** возвращает текст из `config/system_prompt.md`. Файл из репозитория админка не меняет, сохранённые версии остаются в `data/prompts/` (каталог не коммитится).
+- **Восстановить промпт по умолчанию** возвращает текст из `prompt_default.md` этой организации. Файл админка не меняет, сохранённые версии остаются в `data/tenants/{slug}/prompts/`.
 - Пока активен промпт по умолчанию, правка самого файла подхватывается после перезапуска API.
 
 **Импорт** — документы в `data/knowledge`. «Есть в Базе знаний» — документ проиндексирован и ассистент его видит.
@@ -50,16 +62,19 @@ ADMIN_MAX_UPLOAD_MB=50
 
 - Сессия — `httpOnly`, `SameSite=Strict` cookie на путь `/v1/admin`; хранится в памяти API (перезапуск API = повторный вход).
 - 5 неудачных входов за 15 минут с одного IP блокируют вход на 15 минут.
+- Восстановление пароля кабинета организации — письмо со ссылкой. Локально его забирает Mailcatcher, в облаке — Mailtrap. Ссылка одноразовая, живёт `PASSWORD_RESET_TTL_MINUTES` (по умолчанию 60). На `localhost` и в консоли оператора этой ссылки нет: там пароль из `ADMIN_PASSWORD`.
 - Загрузка: только разрешённые расширения, лимит размера, имя файла очищается от путей.
 - В production включите HTTPS и `ADMIN_COOKIE_SECURE=true`; по возможности ограничьте доступ к `/admin/` по IP в nginx.
 
 ## API
 
-Все эндпоинты, кроме `login`, требуют cookie сессии. Документация — Swagger `/docs`, раздел **admin**.
+Все эндпоинты, кроме `login`, `password/forgot` и `password/reset`, требуют cookie сессии. Документация — Swagger `/docs`, раздел **admin**.
 
 | Метод | Путь | Назначение |
 |-------|------|------------|
-| POST | `/v1/admin/login` | `{"username", "password"}` → cookie |
+| POST | `/v1/admin/login` | `{"username", "password"}` → cookie. В кабинете организации `username` — почта владельца |
+| POST | `/v1/admin/password/forgot` | `{"email"}` — письмо со ссылкой, если почта принадлежит этому кабинету |
+| POST | `/v1/admin/password/reset` | `{"token", "password"}` — новый пароль по ссылке из письма |
 | POST | `/v1/admin/logout` | Завершить сессию |
 | GET | `/v1/admin/me` | Проверка сессии |
 | GET | `/v1/admin/sources` | Список исходников |
@@ -72,7 +87,7 @@ ADMIN_MAX_UPLOAD_MB=50
 | GET | `/v1/admin/prompt` | Активный промпт, текст по умолчанию и история версий |
 | PUT | `/v1/admin/prompt` | `{"content", "note?"}` — новая версия (`409`, если текст не изменился) |
 | POST | `/v1/admin/prompt/activate` | `{"version_id"}` — сделать сохранённую версию текущей |
-| POST | `/v1/admin/prompt/restore-default` | Снова использовать `config/system_prompt.md` |
+| POST | `/v1/admin/prompt/restore-default` | Снова использовать `prompt_default.md` организации |
 
 ```bash
 B=http://localhost:8080

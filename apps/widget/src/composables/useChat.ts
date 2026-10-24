@@ -26,6 +26,36 @@ function generateId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
 }
 
+const SESSION_KEY = 'sputnik_session'
+
+function newSessionId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+  // randomUUID есть только на HTTPS и localhost. На http://*.spootnik.local его нет.
+  const bytes = new Uint8Array(16)
+  if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
+    crypto.getRandomValues(bytes)
+  } else {
+    for (let i = 0; i < bytes.length; i += 1) bytes[i] = Math.floor(Math.random() * 256)
+  }
+  bytes[6] = (bytes[6] & 0x0f) | 0x40
+  bytes[8] = (bytes[8] & 0x3f) | 0x80
+  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+}
+
+function sessionHeaders(json: boolean): HeadersInit {
+  let id = localStorage.getItem(SESSION_KEY)
+  if (!id) {
+    id = newSessionId()
+    localStorage.setItem(SESSION_KEY, id)
+  }
+  const headers: Record<string, string> = { 'X-Session-Id': id }
+  if (json) headers['Content-Type'] = 'application/json'
+  return headers
+}
+
 function resolveApiUrl(apiUrl?: string): string {
   const raw = (apiUrl ?? '').trim()
   if (!raw) {
@@ -55,7 +85,7 @@ export function useChat(options: UseChatOptions) {
     try {
       const response = await fetch(
         `${apiBase()}/v1/suggestions/starter?count=${suggestionCount}`,
-        { credentials: 'include' },
+        { credentials: 'omit', headers: sessionHeaders(false) },
       )
       if (!response.ok) throw new Error(`HTTP ${response.status}`)
       const data = await response.json()
@@ -89,7 +119,8 @@ export function useChat(options: UseChatOptions) {
     error.value = null
     fetch(`${apiBase()}/v1/session`, {
       method: 'DELETE',
-      credentials: 'include',
+      credentials: 'omit',
+      headers: sessionHeaders(false),
     }).catch(() => {})
     loadStarterSuggestions()
   }
@@ -120,8 +151,8 @@ export function useChat(options: UseChatOptions) {
       // stream:false — надёжнее для встраивания; ответ целиком как JSON
       const response = await fetch(`${apiBase()}/v1/chat`, {
         method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
+        credentials: 'omit',
+        headers: sessionHeaders(true),
         body: JSON.stringify({ message: trimmed, stream: false }),
       })
 

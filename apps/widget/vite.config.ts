@@ -21,15 +21,15 @@ export default defineConfig(({ command }) => {
     build: {
       lib: {
         entry: resolve(__dirname, 'src/embed.ts'),
-        name: 'ParkinsonChatWidget',
+        name: 'SputnikWidget',
         formats: ['iife'],
-        fileName: () => 'parkinson-chat-widget.js',
+        fileName: () => 'sputnik.js',
       },
       cssCodeSplit: false,
       rollupOptions: {
         output: {
           inlineDynamicImports: true,
-          assetFileNames: 'parkinson-chat-widget.[ext]',
+          assetFileNames: 'sputnik.[ext]',
         },
       },
     },

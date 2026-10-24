@@ -33,7 +33,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     throw new ApiError('Нет связи с сервером', 0)
   }
 
-  if (response.status === 401 && path !== '/login') {
+  if (response.status === 401 && path !== '/login' && !path.startsWith('/password/')) {
     onUnauthorized()
   }
   if (!response.ok) {
@@ -61,6 +61,10 @@ function json(method: string, body?: unknown): RequestInit {
 export const api = {
   login: (username: string, password: string) =>
     request<{ username: string }>('/login', json('POST', { username, password })),
+  forgotPassword: (email: string) =>
+    request<{ detail: string }>('/password/forgot', json('POST', { email })),
+  resetPassword: (token: string, password: string) =>
+    request<{ detail: string }>('/password/reset', json('POST', { token, password })),
   logout: () => request<void>('/logout', { method: 'POST' }),
   me: () => request<{ username: string }>('/me'),
 
@@ -86,4 +90,70 @@ export const api = {
   activatePrompt: (versionId: string) =>
     request<PromptState>('/prompt/activate', json('POST', { version_id: versionId })),
   restoreDefaultPrompt: () => request<PromptState>('/prompt/restore-default', { method: 'POST' }),
+
+  widget: () => request<WidgetSettings>('/widget'),
+  saveWidget: (body: WidgetSettings) => request<WidgetSettings>('/widget', json('PUT', body)),
+}
+
+export interface WidgetSettings {
+  title: string
+  description: string
+  primary_color: string
+  show_sources: boolean
+  disclaimer: string
+  legal_notes: string
+  logo_url: string
+  origin: string
+  snippet: string
+}
+
+async function platformRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const response = await fetch(`/v1/platform${path}`, { credentials: 'same-origin', ...init })
+  if (!response.ok) {
+    let detail = `Ошибка сервера (${response.status})`
+    try {
+      const body = await response.json()
+      if (typeof body?.detail === 'string') detail = body.detail
+    } catch {
+      /* not json */
+    }
+    throw new ApiError(detail, response.status)
+  }
+  return (await response.json()) as T
+}
+
+export interface PlatformTenant {
+  id: number
+  slug: string
+  name: string
+  email: string
+  status: string
+  documents: number
+  disk_bytes: number
+  questions_7d: number
+  tokens_7d: number
+  questions_today: number
+  tokens_today: number
+  errors_today: number
+  anomalies: string[]
+}
+
+export const platformApi = {
+  login: (username: string, password: string) =>
+    platformRequest<{ username: string }>('/login', json('POST', { username, password })),
+  tenants: () => platformRequest<{ items: PlatformTenant[] }>('/tenants'),
+  approve: (id: number) => platformRequest<{ status: string }>(`/tenants/${id}/approve`, { method: 'POST' }),
+  reject: (id: number) => platformRequest<{ status: string }>(`/tenants/${id}/reject`, { method: 'POST' }),
+  setEnabled: (id: number, enabled: boolean) =>
+    platformRequest<{ status: string }>(`/tenants/${id}/enabled`, json('POST', { enabled })),
+  gigachat: () =>
+    platformRequest<{
+      model: string
+      scope: string
+      questions_7d: number
+      tokens_7d: number
+      balance: unknown
+      balance_note: string
+      alerts: string[]
+    }>('/gigachat'),
 }

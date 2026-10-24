@@ -4,8 +4,9 @@ from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv()
 
-from apps.api.app.api.routes import admin, chat, gigachat, health, knowledge, suggestions
+from apps.api.app.api.routes import admin, chat, gigachat, health, knowledge, platform, suggestions, widget
 from apps.api.app.config import settings
+from apps.api.app.host_middleware import PlatformHostMiddleware
 
 app = FastAPI(
     title="Parkinson Support Assistant API",
@@ -19,11 +20,12 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origin_list,
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(PlatformHostMiddleware)
 
 app.include_router(health.router)
 app.include_router(gigachat.router)
@@ -31,6 +33,8 @@ app.include_router(knowledge.router)
 app.include_router(chat.router)
 app.include_router(suggestions.router)
 app.include_router(admin.router)
+app.include_router(platform.router)
+app.include_router(widget.router)
 
 
 @app.get("/")

@@ -5,8 +5,9 @@ MEDICAL_DISCLAIMER = (
 )
 
 
-def append_disclaimer(answer: str) -> str:
-    return f"{answer.strip()}\n\n---\n{MEDICAL_DISCLAIMER}"
+def append_disclaimer(answer: str, disclaimer: str | None = None) -> str:
+    text = (disclaimer or MEDICAL_DISCLAIMER).strip()
+    return f"{answer.strip()}\n\n---\n{text}"
 
 
 JAILBREAK_PATTERNS = (

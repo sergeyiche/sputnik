@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import ipaddress
 import logging
+import time
 from datetime import datetime
+from urllib.parse import quote
 
 from fastapi import APIRouter, Cookie, Depends, File, Form, HTTPException, Query, Request, Response, UploadFile, status
 from pydantic import BaseModel, Field
@@ -14,9 +16,19 @@ from apps.api.app.deps import (
     get_admin_auth,
     get_ingest_runner,
     get_knowledge_files_service,
+    get_mailer,
+    get_platform_store,
     get_system_prompt_store,
     get_vector_store,
 )
+from apps.api.app.tenant_sessions import drop as drop_tenant_session
+from apps.api.app.tenant_sessions import drop_for_tenant
+from apps.api.app.tenant_sessions import issue as issue_tenant_session
+from apps.api.app.tenant_sessions import tenant_id_for
+from packages.integrations.mailtrap import MailtrapError, MailtrapMailer
+from packages.platform.context import scope_var, tenant_var
+from packages.platform.emails import valid_email
+from packages.platform.store import PlatformError, PlatformStore, Tenant
 from packages.admin.ingest_jobs import IngestAlreadyRunningError, IngestJobRunner
 from packages.admin.knowledge_files import (
     FileExistsConflictError,
@@ -47,6 +59,17 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/v1/admin", tags=["admin"])
 
 COOKIE_PATH = "/v1/admin"
+_RESET_WINDOW_SECONDS = 15 * 60
+_RESET_LIMIT = 5
+_reset_attempts: dict[str, list[float]] = {}
+
+
+def _forgot_detail() -> str:
+    minutes = settings.password_reset_ttl_minutes
+    return (
+        "Если эта почта привязана к кабинету, мы отправили письмо со ссылкой. "
+        f"Она действует {minutes} мин."
+    )
 
 
 # --- auth ------------------------------------------------------------------------------
@@ -68,6 +91,14 @@ def require_admin(
     auth: AdminAuthService = Depends(get_admin_auth),
     token: str | None = Cookie(default=None, alias=settings.admin_cookie_name),
 ) -> None:
+    scope = scope_var.get()
+    if scope.kind == "tenant":
+        tenant = tenant_var.get()
+        if tenant is None or tenant.status != "active":
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Организация не найдена или ещё не включена")
+        if tenant_id_for(token) != tenant.id:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Требуется вход")
+        return
     if not auth.configured:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Админка не настроена: задайте ADMIN_USERNAME и ADMIN_PASSWORD")
     if not auth.validate(token):
@@ -75,7 +106,7 @@ def require_admin(
 
 
 class LoginRequest(BaseModel):
-    username: str = Field(..., min_length=1, max_length=128)
+    username: str = Field(..., min_length=1, max_length=200)
     password: str = Field(..., min_length=1, max_length=256)
 
 
@@ -90,6 +121,9 @@ def login(
     response: Response,
     auth: AdminAuthService = Depends(get_admin_auth),
 ) -> MeResponse:
+    if scope_var.get().kind == "tenant":
+        return _login_tenant(payload, response)
+
     client = _client_id(request)
     try:
         token = auth.login(payload.username, payload.password, client)
@@ -118,6 +152,26 @@ def login(
     return MeResponse(username=payload.username)
 
 
+def _login_tenant(payload: LoginRequest, response: Response) -> MeResponse:
+    tenant = tenant_var.get()
+    if tenant is None or tenant.status != "active":
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Организация не найдена или ещё не включена")
+    owner = get_platform_store().authenticate(payload.username, payload.password)
+    if owner is None or owner.id != tenant.id:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Неверный логин или пароль")
+    token = issue_tenant_session(tenant.id, settings.admin_session_ttl_minutes * 60)
+    response.set_cookie(
+        key=settings.admin_cookie_name,
+        value=token,
+        max_age=settings.admin_session_ttl_minutes * 60,
+        httponly=True,
+        secure=settings.admin_cookie_secure,
+        samesite="strict",
+        path=COOKIE_PATH,
+    )
+    return MeResponse(username=payload.username)
+
+
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
 def logout(
     response: Response,
@@ -125,14 +179,126 @@ def logout(
     token: str | None = Cookie(default=None, alias=settings.admin_cookie_name),
 ) -> Response:
     auth.logout(token)
+    drop_tenant_session(token)
     response.delete_cookie(settings.admin_cookie_name, path=COOKIE_PATH)
     response.status_code = status.HTTP_204_NO_CONTENT
     return response
 
 
 @router.get("/me", response_model=MeResponse, dependencies=[Depends(require_admin)])
-def me() -> MeResponse:
+def me(token: str | None = Cookie(default=None, alias=settings.admin_cookie_name)) -> MeResponse:
+    tenant = tenant_var.get()
+    if scope_var.get().kind == "tenant" and tenant is not None:
+        return MeResponse(username=tenant.email)
     return MeResponse(username=settings.admin_username)
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: str = Field(..., min_length=3, max_length=200)
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str = Field(..., min_length=10, max_length=512)
+    password: str = Field(..., min_length=8, max_length=256)
+
+
+class MessageResponse(BaseModel):
+    detail: str
+
+
+def clear_password_reset_throttle() -> None:
+    _reset_attempts.clear()
+
+
+def _throttle_password_reset(client: str, email: str) -> None:
+    key = f"{client}|{email.strip().lower()}"
+    now = time.monotonic()
+    hits = [stamp for stamp in _reset_attempts.get(key, []) if now - stamp < _RESET_WINDOW_SECONDS]
+    if len(hits) >= _RESET_LIMIT:
+        _reset_attempts[key] = hits
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            "Слишком много запросов. Попробуйте позже.",
+            headers={"Retry-After": "900"},
+        )
+    hits.append(now)
+    _reset_attempts[key] = hits
+
+
+def _owner_tenant() -> Tenant:
+    tenant = tenant_var.get()
+    if scope_var.get().kind != "tenant" or tenant is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Восстановление пароля доступно в кабинете организации")
+    return tenant
+
+
+def _reset_link(request: Request, slug: str, token: str) -> str:
+    base = settings.platform_base_domain.strip().lower().strip(".")
+    raw = request.headers.get("host", "").split(",")[0].strip().lower()
+    hostname, separator, port = raw.partition(":")
+    allowed = {f"{slug}.{base}"}
+    if hostname.endswith(".localhost"):
+        allowed.add(hostname)
+    if hostname not in allowed:
+        hostname = f"{slug}.{base}"
+        separator = ""
+        port = ""
+    forwarded = request.headers.get("x-forwarded-proto", "").split(",")[0].strip().lower()
+    scheme = forwarded if forwarded in {"http", "https"} else request.url.scheme
+    if scheme not in {"http", "https"}:
+        scheme = "https"
+    host = f"{hostname}:{port}" if separator and port else hostname
+    return f"{scheme}://{host}/admin/#reset={quote(token, safe='')}"
+
+
+@router.post("/password/forgot", response_model=MessageResponse)
+def forgot_password(
+    payload: ForgotPasswordRequest,
+    request: Request,
+    store: PlatformStore = Depends(get_platform_store),
+    mailer: MailtrapMailer = Depends(get_mailer),
+) -> MessageResponse:
+    tenant = _owner_tenant()
+    email = payload.email.strip().lower()
+    if not valid_email(email):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Укажите корректный email")
+    _throttle_password_reset(_client_id(request), email)
+    if not mailer.configured:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Отправка писем не настроена")
+    issued = store.issue_password_reset(
+        email,
+        tenant_id=tenant.id,
+        ttl_seconds=settings.password_reset_ttl_minutes * 60,
+    )
+    if issued is None:
+        return MessageResponse(detail=_forgot_detail())
+    minutes = settings.password_reset_ttl_minutes
+    link = _reset_link(request, tenant.slug, issued.token)
+    text = (
+        "Здравствуйте.\n\n"
+        "Чтобы задать новый пароль кабинета Спутник, откройте ссылку "
+        f"(она действует {minutes} мин.):\n\n"
+        f"{link}\n\n"
+        "Если вы не запрашивали восстановление, ничего делать не нужно.\n"
+    )
+    try:
+        mailer.send(to_email=issued.email, subject="Восстановление пароля кабинета Спутник", text=text)
+    except MailtrapError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+    return MessageResponse(detail=_forgot_detail())
+
+
+@router.post("/password/reset", response_model=MessageResponse)
+def reset_password(
+    payload: ResetPasswordRequest,
+    store: PlatformStore = Depends(get_platform_store),
+) -> MessageResponse:
+    try:
+        tenant = store.reset_password(payload.token, payload.password)
+    except PlatformError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    drop_for_tenant(tenant.id)
+    return MessageResponse(detail="Пароль обновлён. Войдите с новым паролем.")
 
 
 # --- sources (knowledge_sources) -------------------------------------------------------

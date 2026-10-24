@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import { useChat, type ChatMessage, type ChatSource } from '../composables/useChat'
@@ -12,18 +12,24 @@ const props = withDefaults(
   }>(),
   {
     apiUrl: '',
-    title: 'Ассистент по болезни Паркинсона',
-    placeholder: 'Задайте вопрос о болезни Паркинсона…',
+    title: 'Спутник',
+    placeholder: 'Задайте вопрос…',
   },
 )
 
-const DISCLAIMER =
-  'Информация носит справочный характер и не заменяет консультацию врача.'
+const disclaimer = ref(
+  'Этот ассистент предоставляет общую справочную информацию и не заменяет консультацию специалиста.',
+)
+const brand = ref('#fc7f03')
+const heading = ref(props.title)
+const subtitle = ref('')
+const legalNotes = ref('')
+const legalOpen = ref(false)
 
 const FALLBACK_SUGGESTIONS = [
-  'Что такое болезнь Паркинсона?',
-  'Какие бывают симптомы на ранних стадиях?',
-  'Как правильно принимать лекарства?',
+  'Чем может помочь Спутник?',
+  'Как добавить материалы организации?',
+  'Где посмотреть источники ответа?',
 ]
 
 const resolvedApiUrl =
@@ -38,6 +44,7 @@ const {
   suggestions,
   sourceUrl,
   toggle,
+  open,
   close,
   clearChat,
   sendMessage,
@@ -46,10 +53,31 @@ const {
   fallbackSuggestions: FALLBACK_SUGGESTIONS,
 })
 
+onMounted(async () => {
+  window.addEventListener('sputnik-open', () => open())
+  if (!resolvedApiUrl) return
+  try {
+    const response = await fetch(`${resolvedApiUrl}/v1/widget/config`, { credentials: 'omit' })
+    if (!response.ok) return
+    const data = await response.json()
+    if (data.title) heading.value = data.title
+    if (typeof data.description === 'string') subtitle.value = data.description
+    if (data.disclaimer) disclaimer.value = data.disclaimer
+    if (typeof data.legal_notes === 'string') legalNotes.value = data.legal_notes
+    if (data.primary_color) brand.value = data.primary_color
+  } catch {
+    /* the widget still opens with the built-in title */
+  }
+})
+
 const inputText = ref('')
 const messagesEl = ref<HTMLElement | null>(null)
 
 function onGlobalKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape' && legalOpen.value) {
+    legalOpen.value = false
+    return
+  }
   if (e.key === 'Escape' && isOpen.value) {
     close()
   }
@@ -164,7 +192,7 @@ const hasMessages = computed(() => messages.value.length > 0)
 </script>
 
 <template>
-  <div class="pcw-root" aria-live="polite">
+  <div class="pcw-root" aria-live="polite" :style="{ '--pcw-brand': brand }">
     <button
       v-if="!isOpen"
       class="pcw-launcher"
@@ -181,9 +209,9 @@ const hasMessages = computed(() => messages.value.length > 0)
 
     <div v-else class="pcw-panel" role="dialog" aria-label="Чат ассистента">
       <header class="pcw-header">
-        <div>
-          <h2 class="pcw-title">{{ title }}</h2>
-          <p class="pcw-disclaimer">{{ DISCLAIMER }}</p>
+        <div class="pcw-heading">
+          <h2 class="pcw-title">{{ heading }}</h2>
+          <p v-if="subtitle" class="pcw-subtitle">{{ subtitle }}</p>
         </div>
         <div class="pcw-header-actions">
           <button
@@ -195,7 +223,17 @@ const hasMessages = computed(() => messages.value.length > 0)
           >
             ↺
           </button>
-          <button class="pcw-icon-btn" type="button" title="Закрыть" @click="toggle">✕</button>
+          <button class="pcw-icon-btn" type="button" title="Закрыть" aria-label="Закрыть" @click="toggle">
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+              <path
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                d="M6 6l12 12M18 6L6 18"
+              />
+            </svg>
+          </button>
         </div>
       </header>
 
@@ -288,6 +326,24 @@ const hasMessages = computed(() => messages.value.length > 0)
       </div>
 
       <footer class="pcw-input-area">
+        <div v-if="disclaimer || legalNotes" class="pcw-legal">
+          <p v-if="disclaimer" class="pcw-disclaimer">{{ disclaimer }}</p>
+          <button
+            v-if="legalNotes"
+            class="pcw-legal-help"
+            type="button"
+            aria-label="Подробная юридическая информация"
+            @click="legalOpen = true"
+          >
+            ?
+          </button>
+        </div>
+        <div v-if="legalOpen" class="pcw-legal-layer" @click.self="legalOpen = false">
+          <div class="pcw-legal-card" role="dialog" aria-label="Подробная юридическая информация">
+            <button class="pcw-legal-close" type="button" aria-label="Закрыть" @click="legalOpen = false">✕</button>
+            <p class="pcw-legal-card__text">{{ legalNotes }}</p>
+          </div>
+        </div>
         <textarea
           v-model="inputText"
           class="pcw-input"
@@ -347,53 +403,156 @@ const hasMessages = computed(() => messages.value.length > 0)
 }
 
 .pcw-panel {
+  position: relative;
   width: min(400px, calc(100vw - 32px));
   height: min(560px, calc(100vh - 48px));
-  background: #fff;
+  background: var(--pcw-brand);
   border-radius: 16px;
   box-shadow: 0 8px 40px rgba(0, 0, 0, 0.18);
   display: flex;
   flex-direction: column;
+  align-items: stretch;
   overflow: hidden;
+  padding: 0;
 }
 
 .pcw-header {
+  align-self: stretch;
+  box-sizing: border-box;
+  width: 100%;
+  margin: 0;
+  align-items: center;
   background: var(--pcw-brand);
   color: #fff;
   padding: 14px 16px;
   display: flex;
   justify-content: space-between;
   gap: 8px;
+  flex-shrink: 0;
+  border-radius: 0;
+}
+
+.pcw-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
 }
 
 .pcw-title {
   margin: 0;
+  flex: 0 0 auto;
   font-size: 1.05rem;
   font-weight: 600;
+  line-height: 1.25;
+}
+
+.pcw-subtitle {
+  margin: 0;
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.35;
+  opacity: 0.92;
+}
+
+.pcw-legal {
+  width: 100%;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
 }
 
 .pcw-disclaimer {
-  margin: 4px 0 0;
+  flex: 1;
+  margin: 0;
   font-size: 0.72rem;
-  opacity: 0.75;
   line-height: 1.35;
+  color: #64748b;
+}
+
+.pcw-legal-help {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  border: 1px solid #94a3b8;
+  border-radius: 50%;
+  background: transparent;
+  color: #64748b;
+  font: 12px/16px system-ui, sans-serif;
+  cursor: pointer;
+  padding: 0;
+}
+
+.pcw-legal-help:hover {
+  border-color: #475569;
+  color: #334155;
+}
+
+.pcw-legal-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: flex-end;
+  padding: 12px;
+  background: rgba(15, 23, 42, 0.35);
+}
+
+.pcw-legal-card {
+  position: relative;
+  width: 100%;
+  max-height: 70%;
+  overflow: auto;
+  background: #fff;
+  border-radius: 12px;
+  padding: 12px 36px 14px 14px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+}
+
+.pcw-legal-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  border: 0;
+  background: transparent;
+  color: #64748b;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.pcw-legal-card__text {
+  margin: 0;
+  white-space: pre-wrap;
+  font-size: 0.85rem;
+  line-height: 1.45;
+  color: #1e293b;
 }
 
 .pcw-header-actions {
   display: flex;
+  align-items: center;
   gap: 4px;
   flex-shrink: 0;
 }
 
 .pcw-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   background: rgba(255, 255, 255, 0.2);
   border: none;
   color: #fff;
   width: 32px;
   height: 32px;
+  padding: 0;
   border-radius: 8px;
   cursor: pointer;
-  font-size: 1rem;
+  line-height: 0;
 }
 
 .pcw-icon-btn:hover {
@@ -615,6 +774,7 @@ const hasMessages = computed(() => messages.value.length > 0)
   padding: 12px;
   border-top: 1px solid #e2e8f0;
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   background: #fff;
 }

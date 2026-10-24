@@ -21,6 +21,7 @@ COPY apps/widget/nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /build/dist/ /usr/share/nginx/html/widget/
 COPY --from=build-admin /build/dist/ /usr/share/nginx/html/admin/
 COPY sample-site/ /usr/share/nginx/html/
+COPY apps/landing/ /usr/share/nginx/html/landing/
 
 EXPOSE 80
 
