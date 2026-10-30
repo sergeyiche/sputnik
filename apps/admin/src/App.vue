@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import { api, setUnauthorizedHandler } from './api'
 import ImportTab from './components/ImportTab.vue'
 import LoginForm from './components/LoginForm.vue'
@@ -10,10 +10,7 @@ import WidgetTab from './components/WidgetTab.vue'
 
 type Tab = 'sources' | 'import' | 'prompt' | 'widget'
 
-const helpHost = window.location.hostname.startsWith('help.')
-const adminAlias = window.location.hostname.startsWith('admin.')
-const area = ref<'platform' | 'cabinet'>(adminAlias ? 'platform' : 'cabinet')
-const showPlatform = computed(() => adminAlias || (helpHost && area.value === 'platform'))
+const operatorConsole = window.location.pathname.startsWith('/console')
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'sources', label: 'База знаний' },
@@ -50,6 +47,11 @@ async function logout() {
 }
 
 onMounted(async () => {
+  document.title = operatorConsole ? 'Спутник — платформа' : 'Спутник — администрирование'
+  if (operatorConsole) {
+    checking.value = false
+    return
+  }
   try {
     username.value = (await api.me()).username
   } catch {
@@ -61,11 +63,7 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div v-if="helpHost" class="switch">
-    <button type="button" :class="{ 'is-active': area === 'platform' }" @click="area = 'platform'">Платформа</button>
-    <button type="button" :class="{ 'is-active': area === 'cabinet' }" @click="area = 'cabinet'">Кабинет help</button>
-  </div>
-  <PlatformConsole v-if="showPlatform" />
+  <PlatformConsole v-if="operatorConsole" />
   <div v-else-if="checking" class="boot"><span class="spinner" /></div>
   <LoginForm
     v-else-if="!username || openingReset"
@@ -179,28 +177,5 @@ onMounted(async () => {
   max-width: 1200px;
   margin: 0 auto;
   padding: 24px;
-}
-
-.switch {
-  display: flex;
-  gap: 8px;
-  padding: 12px 24px;
-  background: #fff;
-  border-bottom: 1px solid var(--border);
-}
-
-.switch button {
-  font: inherit;
-  border: 1px solid var(--border);
-  background: transparent;
-  border-radius: 999px;
-  padding: 6px 12px;
-  cursor: pointer;
-}
-
-.switch button.is-active {
-  background: var(--brand);
-  color: #fff;
-  border-color: var(--brand);
 }
 </style>

@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Заявка — Спутник</title>
+  <style>
+    :root { color-scheme: light; --ink: #2a241c; --muted: #6b6258; --paper: #fbf6ef; --card: #fff; --line: #eadfce; --accent: #fc7f03; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: Georgia, "Times New Roman", serif; color: var(--ink); background: var(--paper); }
+    header, main { width: min(640px, calc(100% - 32px)); margin: 0 auto; }
+    header { padding: 28px 0 8px; }
+    .mark { font-weight: 700; letter-spacing: 0.04em; }
+    h1 { font-size: 36px; line-height: 1.1; margin: 12px 0; }
+    form, .card { background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 18px; display: grid; gap: 10px; margin: 12px 0 48px; }
+    h2 { font-size: 20px; margin: 0; }
+    label { display: grid; gap: 4px; font-size: 15px; }
+    input { font: inherit; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
+    input[readonly] { background: #f6f1e8; color: var(--muted); }
+    input[type="color"] { padding: 4px; height: 42px; width: 72px; }
+    button { font-family: inherit; background: var(--accent); color: #fff; border: 0; border-radius: 999px; padding: 12px 18px; cursor: pointer; justify-self: start; }
+    .steps { display: flex; gap: 8px; margin: 8px 0 0; }
+    .steps span { color: var(--muted); font-size: 15px; }
+    .steps .on { color: var(--ink); font-weight: 700; }
+    .note { color: var(--muted); margin: 0; }
+    .color-row { display: flex; align-items: center; gap: 12px; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="mark">СПУТНИК</div>
+    <h1>Продолжение заявки</h1>
+    <div class="steps" id="steps">
+      <span data-step="organization">1. Организация</span>
+      <span data-step="widget">2. Виджет</span>
+    </div>
+  </header>
+  <main>
+    <p class="note" id="status">Открываем ссылку…</p>
+    <form id="organization" hidden>
+      <h2>Организация</h2>
+      <label>Название <input name="name" readonly /></label>
+      <label>Телефон <input name="phone" readonly /></label>
+      <label>Почта <input name="email" readonly /></label>
+      <label>Адрес латиницей <input name="slug" required pattern="[a-z0-9][a-z0-9-]{0,30}[a-z0-9]" placeholder="mycompany" /></label>
+      <label>Пароль кабинета <input name="password" type="password" minlength="8" required /></label>
+      <button type="submit">Дальше</button>
+      <p class="note" id="org-error"></p>
+    </form>
+    <form id="widget" hidden>
+      <h2>Виджет</h2>
+      <p class="note">Предупреждение, подробный текст и показ источников можно поменять позже в кабинете.</p>
+      <label>Название в шапке <input name="widget_title" required maxlength="120" /></label>
+      <label>Описание рядом с названием <input name="widget_description" maxlength="150" /></label>
+      <label>Цветовая схема
+        <span class="color-row">
+          <input name="primary_color" type="color" value="#fc7f03" />
+          <input name="color_text" value="#fc7f03" maxlength="7" />
+        </span>
+      </label>
+      <button type="submit">Отправить заявку</button>
+      <p class="note" id="widget-error"></p>
+    </form>
+    <section class="card" id="done" hidden>
+      <h2>Заявка принята</h2>
+      <p class="note">Поддомен включим после проверки. До этого чат на нём не отвечает.</p>
+    </section>
+  </main>
+  <script>
+    const params = new URLSearchParams(location.search)
+    const token = params.get('token') || ''
+    const status = document.getElementById('status')
+    const organization = document.getElementById('organization')
+    const widget = document.getElementById('widget')
+    const done = document.getElementById('done')
+    const color = widget.querySelector('[name="primary_color"]')
+    const colorText = widget.querySelector('[name="color_text"]')
+
+    function show(step) {
+      organization.hidden = step !== 'organization'
+      widget.hidden = step !== 'widget'
+      done.hidden = step !== 'done'
+      status.hidden = step !== ''
+      document.querySelectorAll('#steps span').forEach((item) => {
+        item.classList.toggle('on', step === 'done' || item.dataset.step === step)
+      })
+    }
+
+    function detail(data) {
+      return (data && data.detail) || 'Не удалось сохранить'
+    }
+
+    async function load() {
+      if (!token) {
+        status.textContent = 'В ссылке нет кода заявки.'
+        return
+      }
+      const response = await fetch('/v1/platform/signup?token=' + encodeURIComponent(token))
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        status.textContent = detail(data)
+        return
+      }
+      fill(data)
+      show(data.step)
+    }
+
+    function fill(data) {
+      organization.elements.name.value = data.name || ''
+      organization.elements.phone.value = data.phone || ''
+      organization.elements.email.value = data.email || ''
+      if (data.slug) organization.elements.slug.value = data.slug
+    }
+
+    color.addEventListener('input', () => { colorText.value = color.value })
+    colorText.addEventListener('change', () => {
+      if (/^#[0-9a-fA-F]{6}$/.test(colorText.value)) color.value = colorText.value
+    })
+
+    organization.addEventListener('submit', async (event) => {
+      event.preventDefault()
+      const error = document.getElementById('org-error')
+      error.textContent = ''
+      const response = await fetch('/v1/platform/signup/organization', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          token,
+          slug: organization.elements.slug.value,
+          password: organization.elements.password.value,
+        }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        error.textContent = detail(data)
+        return
+      }
+      fill(data)
+      show('widget')
+    })
+
+    widget.addEventListener('submit', async (event) => {
+      event.preventDefault()
+      const error = document.getElementById('widget-error')
+      error.textContent = ''
+      const response = await fetch('/v1/platform/signup/widget', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          token,
+          widget_title: widget.elements.widget_title.value,
+          widget_description: widget.elements.widget_description.value,
+          primary_color: color.value,
+        }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        error.textContent = detail(data)
+        return
+      }
+      show('done')
+    })
+
+    load()
+  </script>
+</body>
+</html>

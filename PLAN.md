@@ -4,7 +4,7 @@
 
 В ветку не входят мессенджеры, оплата, отдельный ключ GigaChat на организацию и смена Chroma или SQLite.
 
-Локальные адреса: `http://spootnik.local:8080/`, `http://help.spootnik.local:8080/`, `http://admin.spootnik.local:8080/`. На проде те же роли у `spootnik.ru` и `*.spootnik.ru`.
+Локальные адреса: `http://spootnik.local:8080/` (лэндинг), `http://spootnik.local:8080/console/` (оператор), `http://help.spootnik.local:8080/admin/` (кабинет help). `admin.spootnik.local` переходит на `/console/`. На проде те же роли у `spootnik.ru` и `*.spootnik.ru`.
 
 ## Сделано
 
@@ -13,6 +13,7 @@
 - [x] Каталоги `data/tenants/{slug}/knowledge`, `knowledge_sources`, `prompts`, `branding`. Фонд лежит в `data/tenants/parkinson`, коллекция по-прежнему `parkinson_kb`. Исходные `data/knowledge` и `data/knowledge_sources` пока тоже на месте.
 - [x] Шаблон промпта новой организации — `config/default_system_prompt.md`, с плейсхолдерами (`{{НАЗВАНИЕ_ОРГАНИЗАЦИИ}}`, аудитория, темы, ссылки и другие). Промпт фонда — `data/tenants/parkinson/prompt_default.md`, промпт help — `data/tenants/help/prompt_default.md`. Почта и пароль владельца только в `platform.db`.
 - [x] Заявка с лэндинга, очередь, подтверждение, отклонение, чекбокс включения и суточная статистика.
+- [x] На лэндинге заявка — название, телефон и почта. Письмо ведёт на `/onboarding/?token=…` (24 часа, ссылку можно открыть снова). Шаг 1 резервирует адрес и пароль, шаг 2 задаёт шапку и цвет. Организация `pending` появляется только после обоих шагов, затем её включает оператор.
 - [x] Один ключ GigaChat: расход по организациям, `GET /balance`, алерты 429 и 402. Если остаток кабинета API не отдаёт, карточка об этом говорит.
 - [x] Настройки виджета, публичный `GET /v1/widget/config`, сниппет `sputnik-widget`, сессия через `X-Session-Id`.
 - [x] Лэндинг с кнопками «Оставить заявку» и «Спросить Спутника». Скрипт виджета берётся с `help.{текущий домен}`.
@@ -23,8 +24,7 @@
 
 ## Уже изменённые решения
 
-- Консоль оператора открывается на `help.spootnik.local` (на проде — `help.spootnik.ru`). `admin.spootnik.local` — тот же экран, запасной адрес.
-- На `help` две вкладки: «Кабинет help» (база, импорт, промпт, виджет) и «Платформа» (очередь и ключ GigaChat).
+- Консоль оператора — `spootnik.local/console` (на проде `spootnik.ru/console`). Кабинет `help` — только `help.spootnik.local/admin`. `admin.spootnik.local` перенаправляет на `/console/`.
 - Базу `help` не наполняем готовыми txt. Документ конвертируется и импортируется через админку.
 
 ## Ещё не сделано

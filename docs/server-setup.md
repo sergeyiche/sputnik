@@ -75,7 +75,7 @@ docker compose --profile frontend up -d
 ## 8. Поддомены
 
 Для пилота нужна запись `*.spootnik.ru` и сертификат на `spootnik.ru` и `*.spootnik.ru`.
-`spootnik.ru` отдаёт страницу заявки. Консоль оператора и виджет этой страницы — на `help.spootnik.ru`. `admin.spootnik.ru` открывает ту же консоль.
+`spootnik.ru` отдаёт страницу заявки, консоль оператора — `spootnik.ru/console/`. Виджет лэндинга берётся с `help.spootnik.ru`. Кабинет help — `help.spootnik.ru/admin/`. `admin.spootnik.ru` переходит на `/console/`.
 Остальные имена становятся адресами организаций после включения заявки. Уже работающий адрес фонда — `parkinson.spootnik.ru`.
 
 Почта и пароль владельца хранятся в `data/platform/platform.db`, не в `.env`. Каталоги организаций раскладывает `scripts/seed_platform.py` внутри контейнера API.

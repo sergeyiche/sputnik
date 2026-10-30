@@ -14,15 +14,7 @@ from apps.api.app.config import settings
 from apps.api.app.main import app
 from packages.integrations.mailtrap.client import MailtrapError, MailtrapMailer
 from packages.security.admin_auth import AdminAuthService
-
-
-class RecordingMailer:
-    def __init__(self, configured: bool = True) -> None:
-        self.configured = configured
-        self.messages: list[dict[str, str]] = []
-
-    def send(self, *, to_email: str, subject: str, text: str) -> None:
-        self.messages.append({"to": to_email, "subject": subject, "text": text})
+from tests.unit.onboarding import RecordingMailer, finish_application
 
 
 @pytest.fixture()
@@ -65,11 +57,8 @@ def _approve(client: TestClient, slug: str) -> None:
 
 
 def test_owner_can_set_a_new_password_from_the_letter(client: TestClient, mailer: RecordingMailer) -> None:
-    registered = client.post(
-        "/v1/platform/register",
-        json={"slug": "acme", "name": "Acme", "email": "owner@acme.org", "password": "password1"},
-    )
-    assert registered.status_code == 200, registered.text
+    finish_application(client, mailer, "acme", email="owner@acme.org", name="Acme")
+    mailer.messages.clear()
     _approve(client, "acme")
     host = {"host": "acme.spootnik.ru"}
 
@@ -91,14 +80,9 @@ def test_owner_can_set_a_new_password_from_the_letter(client: TestClient, mailer
 
 
 def test_unknown_email_does_not_send(client: TestClient, mailer: RecordingMailer) -> None:
-    client.post(
-        "/v1/platform/register",
-        json={"slug": "acme", "name": "Acme", "email": "owner@acme.org", "password": "password1"},
-    )
-    client.post(
-        "/v1/platform/register",
-        json={"slug": "beta", "name": "Beta", "email": "owner@beta.org", "password": "password1"},
-    )
+    finish_application(client, mailer, "acme", email="owner@acme.org", name="Acme")
+    finish_application(client, mailer, "beta", email="owner@beta.org", name="Beta", phone="+79990001133")
+    mailer.messages.clear()
     host = {"host": "acme.spootnik.ru"}
     missing = client.post("/v1/admin/password/forgot", headers=host, json={"email": "nobody@acme.org"})
     other = client.post("/v1/admin/password/forgot", headers=host, json={"email": "owner@beta.org"})
@@ -113,10 +97,8 @@ def test_forgot_password_is_only_on_a_tenant_host(client: TestClient) -> None:
 
 
 def test_unconfigured_mailer_is_reported(client: TestClient, mailer: RecordingMailer) -> None:
-    client.post(
-        "/v1/platform/register",
-        json={"slug": "acme", "name": "Acme", "email": "owner@acme.org", "password": "password1"},
-    )
+    finish_application(client, mailer, "acme", email="owner@acme.org", name="Acme")
+    mailer.messages.clear()
     mailer.configured = False
     response = client.post(
         "/v1/admin/password/forgot",

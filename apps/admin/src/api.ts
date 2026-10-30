@@ -127,6 +127,7 @@ export interface PlatformTenant {
   slug: string
   name: string
   email: string
+  phone: string
   status: string
   documents: number
   disk_bytes: number

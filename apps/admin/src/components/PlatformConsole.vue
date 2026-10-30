@@ -93,7 +93,7 @@ function size(bytes: number): string {
             <tr v-for="item in tenants" :key="item.id">
               <td>
                 {{ item.name }}
-                <span class="sub">{{ item.slug }} · {{ item.email }}</span>
+                <span class="sub">{{ item.slug }} · {{ item.phone ? item.phone + ' · ' : '' }}{{ item.email }}</span>
                 <span v-for="reason in item.anomalies" :key="reason" class="sub anomaly">{{ reason }}</span>
               </td>
               <td>{{ item.status }}</td>

@@ -1,4 +1,4 @@
-"""Registration and the operator console on admin.spootnik.ru."""
+"""Registration on the landing host and the operator console on /console."""
 
 from __future__ import annotations
 
@@ -7,18 +7,22 @@ import shutil
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from fastapi import APIRouter, Cookie, Depends, HTTPException, Response, status
+from urllib.parse import quote
+
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, Field
 
 from apps.api.app.config import settings
 from apps.api.app.deps import (
     drop_tenant_pipeline,
     get_admin_auth,
+    get_mailer,
     get_platform_store,
     platform_db_path,
 )
 from apps.api.app.deps import _data_root
 from packages.integrations.gigachat.client import GigaChatApiError, get_gigachat_client
+from packages.integrations.mailtrap import MailtrapError, MailtrapMailer
 from packages.platform.anomalies import anomaly_reasons
 from packages.platform.context import scope_var
 from packages.platform.host import RequestScope
@@ -40,12 +44,25 @@ _OPERATOR_HOSTS = {"platform_admin", "legacy", "landing"}
 
 
 class RegisterRequest(BaseModel):
-    slug: str = Field(..., min_length=2, max_length=32)
     name: str = Field(..., min_length=1, max_length=200)
+    phone: str = Field(..., min_length=10, max_length=32)
     email: str = Field(..., min_length=3, max_length=200)
+
+
+class OrganizationStepRequest(BaseModel):
+    token: str = Field(..., min_length=8, max_length=256)
+    slug: str = Field(..., min_length=2, max_length=32)
     password: str = Field(..., min_length=8, max_length=256)
-    widget_title: str = Field(default="", max_length=120)
+
+
+class WidgetStepRequest(BaseModel):
+    token: str = Field(..., min_length=8, max_length=256)
+    widget_title: str = Field(..., min_length=1, max_length=120)
     widget_description: str = Field(default="", max_length=150)
+    primary_color: str = Field(default="#fc7f03", max_length=16)
+
+
+_SIGNUP_TTL_SECONDS = 24 * 60 * 60
 
 
 class LoginRequest(BaseModel):
@@ -62,12 +79,10 @@ def _scope() -> RequestScope:
 
 
 def _operator_host() -> None:
-    scope = _scope()
-    on_help = scope.kind == "tenant" and scope.slug == "help"
-    if scope.kind not in _OPERATOR_HOSTS and not on_help:
+    if _scope().kind not in _OPERATOR_HOSTS:
         raise HTTPException(
             status.HTTP_404_NOT_FOUND,
-            "Консоль платформы открывается на help." + settings.platform_base_domain,
+            "Консоль платформы открывается на " + settings.platform_base_domain + "/console",
         )
 
 
@@ -95,22 +110,129 @@ def _provision(slug: str, prompt_source: Path | None = None) -> str:
     return str(layout.prompt_file)
 
 
-@router.post("/register")
-def register(payload: RegisterRequest, store: PlatformStore = Depends(get_platform_store)) -> dict:
+def _landing_host() -> None:
     if _scope().kind not in {"landing", "legacy"}:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Заявка отправляется с spootnik.ru")
+
+
+def _signup_error(exc: PlatformError) -> HTTPException:
+    code = status.HTTP_409_CONFLICT if isinstance(exc, (SlugTakenError, EmailTakenError)) else status.HTTP_400_BAD_REQUEST
+    return HTTPException(code, str(exc))
+
+
+def _onboarding_link(request: Request, token: str) -> str:
+    base = settings.platform_base_domain.strip().lower().strip(".")
+    raw = request.headers.get("host", "").split(",")[0].strip().lower()
+    hostname, separator, port = raw.partition(":")
+    if hostname not in {base, f"www.{base}"}:
+        hostname = base
+        separator = ""
+        port = ""
+    forwarded = request.headers.get("x-forwarded-proto", "").split(",")[0].strip().lower()
+    scheme = forwarded if forwarded in {"http", "https"} else request.url.scheme
+    if scheme not in {"http", "https"}:
+        scheme = "https"
+    host = f"{hostname}:{port}" if separator and port else hostname
+    return f"{scheme}://{host}/onboarding/?token={quote(token, safe='')}"
+
+
+def _signup_payload(view) -> dict:
+    return {
+        "name": view.name,
+        "phone": view.phone,
+        "email": view.email,
+        "step": view.step,
+        "slug": view.slug,
+    }
+
+
+@router.post("/register")
+def register(
+    payload: RegisterRequest,
+    request: Request,
+    store: PlatformStore = Depends(get_platform_store),
+    mailer: MailtrapMailer = Depends(get_mailer),
+) -> dict:
+    _landing_host()
+    if not mailer.configured:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Отправка писем не настроена")
     try:
-        tenant = store.register(
-            slug=payload.slug,
+        issued = store.start_signup(
             name=payload.name,
+            phone=payload.phone,
             email=payload.email,
-            password=payload.password,
+            ttl_seconds=_SIGNUP_TTL_SECONDS,
+        )
+    except (EmailTakenError, PlatformError) as exc:
+        raise _signup_error(exc) from exc
+    link = _onboarding_link(request, issued.token)
+    text = (
+        "Здравствуйте.\n\n"
+        "Чтобы продолжить заявку на Спутник, откройте ссылку. "
+        "Она действует 24 часа, и её можно открыть снова, пока заявка не отправлена:\n\n"
+        f"{link}\n\n"
+        "Если вы не оставляли заявку, ничего делать не нужно.\n"
+    )
+    try:
+        mailer.send(to_email=issued.email, subject="Продолжить заявку на Спутник", text=text)
+    except MailtrapError as exc:
+        store.cancel_signup(issued.token)
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+    return {"status": "email_sent"}
+
+
+@router.get("/signup")
+def open_signup(
+    token: str = Query(..., min_length=8, max_length=256),
+    store: PlatformStore = Depends(get_platform_store),
+) -> dict:
+    _landing_host()
+    try:
+        return _signup_payload(store.open_signup(token))
+    except PlatformError as exc:
+        raise _signup_error(exc) from exc
+
+
+@router.post("/signup/organization")
+def signup_organization(
+    payload: OrganizationStepRequest,
+    store: PlatformStore = Depends(get_platform_store),
+) -> dict:
+    _landing_host()
+    try:
+        return _signup_payload(
+            store.save_signup_organization(payload.token, slug=payload.slug, password=payload.password)
+        )
+    except (InvalidSlugError, SlugTakenError, PlatformError) as exc:
+        raise _signup_error(exc) from exc
+
+
+@router.post("/signup/widget")
+def signup_widget(
+    payload: WidgetStepRequest,
+    store: PlatformStore = Depends(get_platform_store),
+) -> dict:
+    _landing_host()
+    try:
+        draft = store.open_signup(payload.token)
+    except PlatformError as exc:
+        raise _signup_error(exc) from exc
+    if draft.step == "done":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Заявка уже отправлена")
+    if draft.step != "widget" or not draft.slug:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Сначала укажите адрес и пароль")
+    path = str(layout_for(Path(_data_root()), draft.slug).prompt_file)
+    try:
+        tenant = store.complete_signup(
+            payload.token,
             widget_title=payload.widget_title,
             widget_description=payload.widget_description,
+            primary_color=payload.primary_color,
+            prompt_path=path,
         )
-    except (InvalidSlugError, SlugTakenError, EmailTakenError, PlatformError) as exc:
-        code = status.HTTP_409_CONFLICT if isinstance(exc, (SlugTakenError, EmailTakenError)) else status.HTTP_400_BAD_REQUEST
-        raise HTTPException(code, str(exc)) from exc
+    except (SlugTakenError, EmailTakenError, PlatformError) as exc:
+        raise _signup_error(exc) from exc
+    _provision(tenant.slug)
     return {"status": tenant.status, "slug": tenant.slug}
 
 
@@ -164,6 +286,7 @@ def list_tenants(store: PlatformStore = Depends(get_platform_store)) -> dict:
                 "slug": tenant.slug,
                 "name": tenant.name,
                 "email": tenant.email,
+                "phone": tenant.phone,
                 "status": tenant.status,
                 "documents": layout.document_count(),
                 "disk_bytes": disk,

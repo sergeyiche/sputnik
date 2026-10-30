@@ -96,7 +96,7 @@ docker compose --profile frontend down
 
 Подробнее: [`data/knowledge_sources/README.md`](data/knowledge_sources/README.md).
 
-Загрузка, конвертация и импорт также доступны в веб-админке `http://localhost:8080/admin/` (нужен `ADMIN_PASSWORD` в `.env`) — см. [`docs/admin.md`](docs/admin.md).
+Загрузка, конвертация и импорт доступны в кабинете организации `http://<slug>:8080/admin/`. Консоль оператора — `http://spootnik.local:8080/console/` (`ADMIN_USERNAME` / `ADMIN_PASSWORD`) — см. [`docs/admin.md`](docs/admin.md).
 
 ---
 

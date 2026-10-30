@@ -47,20 +47,17 @@
       <article><h2>Свой адрес</h2><p>После проверки у организации появляется поддомен, кабинет и короткий код для сайта.</p></article>
     </div>
     <div class="grid">
-      <article><h2>1. Заявка</h2><p>Напишите адрес и почту. Поддомен включается после проверки.</p></article>
+      <article><h2>1. Заявка</h2><p>Напишите название, телефон и почту. Ссылка в письме продолжит заявку.</p></article>
       <article><h2>2. База</h2><p>Загрузите памятки и ответы, которые можно показывать посетителям.</p></article>
       <article><h2>3. Код</h2><p>Вставьте фрагмент на сайт. Окно Спутника появится на страницах.</p></article>
     </div>
     <form id="zayavka">
       <h2>Заявка</h2>
-      <label>Название организации <input name="name" required /></label>
-      <label>Название в шапке виджета <input name="widget_title" required maxlength="120" /></label>
-      <label>Описание в шапке виджета <input name="widget_description" required maxlength="150" /></label>
-      <label>Адрес латиницей <input name="slug" required pattern="[a-z0-9][a-z0-9-]{0,30}[a-z0-9]" placeholder="mycompany" /></label>
-      <label>Почта <input name="email" type="email" required /></label>
-      <label>Пароль кабинета <input name="password" type="password" minlength="8" required /></label>
+      <label>Название организации <input name="name" required maxlength="200" /></label>
+      <label>Телефон <input name="phone" required inputmode="tel" placeholder="+7 900 000-00-00" /></label>
+      <label>Почта <input name="email" type="email" required maxlength="200" /></label>
       <button type="submit">Оставить заявку</button>
-      <p class="note" id="result">Оплата в продукте пока не подключена. Стоимость сообщим отдельно.</p>
+      <p class="note" id="result">На почту придёт ссылка. По ней вы укажете адрес и настроите виджет. Поддомен включается после проверки.</p>
     </form>
   </main>
   <sputnik-widget></sputnik-widget>
@@ -91,7 +88,7 @@
       })
       const data = await response.json().catch(() => ({}))
       result.textContent = response.ok
-        ? 'Заявка принята. Поддомен включим после проверки.'
+        ? 'Письмо со ссылкой отправлено. Откройте его, чтобы продолжить заявку.'
         : (data.detail || 'Не удалось отправить заявку')
     })
   </script>

@@ -11,10 +11,12 @@ from packages.platform.anomalies import anomaly_reasons
 from packages.platform.emails import valid_email
 from packages.platform.host import resolve_host, slug_available
 from packages.platform.passwords import hash_password, verify_password
+from packages.platform.phones import normalize_phone
 from packages.platform.store import (
     EmailTakenError,
     InvalidSlugError,
     PlatformError,
+    SlugTakenError,
     PlatformStore,
     UsageDay,
     normalize_web_color,
@@ -148,6 +150,58 @@ def test_password_reset_is_single_use(tmp_path: Path) -> None:
     with pytest.raises(PlatformError):
         store.reset_password(again.token, "another-one")
     assert other.email == "owner@beta.org"
+
+
+def test_phone_keeps_plus_seven_and_ten_digits() -> None:
+    assert normalize_phone("+7 (999) 000-11-22") == "+79990001122"
+    assert normalize_phone("8 999 000 11 22") == "+79990001122"
+    assert normalize_phone("79990001122") == "+79990001122"
+    with pytest.raises(ValueError):
+        normalize_phone("12345")
+
+
+def test_signup_reserves_slug_and_creates_pending_tenant(tmp_path: Path) -> None:
+    store = PlatformStore(tmp_path / "platform.db")
+    issued = store.start_signup(name="Фонд А", phone="8 (999) 000-11-22", email="owner@acme.org", ttl_seconds=3600)
+    assert store.list_tenants() == []
+    with pytest.raises(EmailTakenError):
+        store.start_signup(name="Другой", phone="+79990001123", email="owner@acme.org", ttl_seconds=3600)
+
+    opened = store.open_signup(issued.token)
+    assert opened.step == "organization"
+    assert opened.phone == "+79990001122"
+    again = store.open_signup(issued.token)
+    assert again.email == "owner@acme.org"
+
+    saved = store.save_signup_organization(issued.token, slug="acme", password="secret123")
+    assert saved.step == "widget"
+    other = store.start_signup(name="Фонд Б", phone="+79990001133", email="owner@beta.org", ttl_seconds=3600)
+    with pytest.raises(SlugTakenError):
+        store.save_signup_organization(other.token, slug="acme", password="secret123")
+
+    pending = store.complete_signup(
+        issued.token,
+        widget_title="Навигатор",
+        widget_description="Ответы по материалам",
+        primary_color="#FC7F03",
+        prompt_path="/data/tenants/acme/prompt_default.md",
+    )
+    assert pending.status == "pending"
+    assert pending.phone == "+79990001122"
+    assert store.authenticate("owner@acme.org", "secret123").id == pending.id
+    settings = store.settings_for(pending.id)
+    assert settings.title == "Навигатор"
+    assert settings.primary_color == "#fc7f03"
+    assert settings.show_sources is True
+    assert store.open_signup(issued.token).step == "done"
+    with pytest.raises(EmailTakenError):
+        store.start_signup(name="Фонд А", phone="+79990001122", email="owner@acme.org", ttl_seconds=3600)
+
+    expired = store.start_signup(name="Старая", phone="+79990001144", email="old@acme.org", ttl_seconds=-1)
+    replacement = store.start_signup(name="Старая", phone="+79990001144", email="old@acme.org", ttl_seconds=3600)
+    with pytest.raises(PlatformError):
+        store.open_signup(expired.token)
+    assert store.open_signup(replacement.token).step == "organization"
 
 
 def test_password_roundtrip() -> None:

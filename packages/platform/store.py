@@ -14,6 +14,7 @@ from pathlib import Path
 from packages.platform.emails import valid_email
 from packages.platform.host import slug_available
 from packages.platform.passwords import hash_password, verify_password
+from packages.platform.phones import normalize_phone
 
 DEFAULT_DISCLAIMER = (
     "Этот ассистент предоставляет общую справочную информацию и не заменяет консультацию специалиста."
@@ -69,6 +70,7 @@ class Tenant:
     prompt_path: str
     created_at: str
     email: str
+    phone: str = ""
 
 
 @dataclass(frozen=True)
@@ -89,6 +91,22 @@ class IssuedReset:
     slug: str
     tenant_id: int
     token: str
+
+
+@dataclass(frozen=True)
+class IssuedSignup:
+    email: str
+    token: str
+
+
+@dataclass(frozen=True)
+class SignupView:
+    name: str
+    phone: str
+    email: str
+    step: str
+    slug: str
+    expires_at: str
 
 
 @dataclass(frozen=True)
@@ -152,8 +170,8 @@ class PlatformStore:
             )
             tenant_id = int(cursor.lastrowid)
             conn.execute(
-                "INSERT INTO users (tenant_id, email, password_hash, created_at) VALUES (?, ?, ?, ?)",
-                (tenant_id, email, hash_password(password), now),
+                "INSERT INTO users (tenant_id, email, password_hash, created_at, phone) VALUES (?, ?, ?, ?, ?)",
+                (tenant_id, email, hash_password(password), now, ""),
             )
             self._insert_default_settings(
                 conn,
@@ -255,6 +273,197 @@ class PlatformStore:
             raise PlatformError("Ссылка недействительна или устарела")
         return tenant
 
+    def start_signup(self, *, name: str, phone: str, email: str, ttl_seconds: int) -> IssuedSignup:
+        """Store an application and return a reusable link token. No organization yet."""
+        name = name.strip()
+        email = email.strip().lower()
+        try:
+            phone = normalize_phone(phone)
+        except ValueError as exc:
+            raise PlatformError(str(exc)) from exc
+        if not name or len(name) > 200:
+            raise PlatformError("Укажите название организации")
+        if not valid_email(email):
+            raise PlatformError("Укажите корректный email")
+        token = secrets.token_urlsafe(32)
+        now = datetime.now(UTC)
+        expires = (now + timedelta(seconds=ttl_seconds)).isoformat()
+        stamp = now.isoformat()
+        with self._lock, self._session() as conn:
+            if conn.execute("SELECT 1 FROM users WHERE email = ?", (email,)).fetchone():
+                raise EmailTakenError("Этот email уже зарегистрирован")
+            existing = conn.execute(
+                "SELECT id, expires_at, submitted_at FROM signups WHERE email = ?",
+                (email,),
+            ).fetchone()
+            if existing is not None:
+                if existing["submitted_at"] or not _expired(existing["expires_at"], now):
+                    raise EmailTakenError("Этот email уже зарегистрирован")
+                conn.execute("DELETE FROM signups WHERE id = ?", (existing["id"],))
+            conn.execute(
+                """
+                INSERT INTO signups (name, phone, email, token_hash, expires_at, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (name, phone, email, _token_hash(token), expires, stamp),
+            )
+        return IssuedSignup(email=email, token=token)
+
+    def cancel_signup(self, token: str) -> None:
+        """Drop an application that never became an organization, so the mailbox can be reused."""
+        with self._lock, self._session() as conn:
+            conn.execute(
+                "DELETE FROM signups WHERE token_hash = ? AND submitted_at IS NULL",
+                (_token_hash(token.strip()),),
+            )
+
+    def open_signup(self, token: str) -> SignupView:
+        with self._lock, self._session() as conn:
+            row = self._signup_row(conn, token)
+            if row["email_verified_at"] is None and row["submitted_at"] is None:
+                conn.execute(
+                    "UPDATE signups SET email_verified_at = ? WHERE id = ?",
+                    (_now(), row["id"]),
+                )
+        return self._signup_view(token)
+
+    def save_signup_organization(self, token: str, *, slug: str, password: str) -> SignupView:
+        slug = slug.strip().lower()
+        if len(slug) < 2 or not slug_available(slug):
+            raise InvalidSlugError("Такой адрес поддомена использовать нельзя")
+        if len(password) < 8 or len(password) > 256:
+            raise PlatformError("Пароль должен быть не короче 8 символов")
+        now = datetime.now(UTC)
+        with self._lock, self._session() as conn:
+            row = self._signup_row(conn, token, now=now, allow_finished=False)
+            if conn.execute("SELECT 1 FROM tenants WHERE slug = ?", (slug,)).fetchone():
+                raise SlugTakenError("Этот поддомен уже занят")
+            conn.execute(
+                """
+                UPDATE signups SET slug = NULL
+                WHERE slug = ? AND id != ? AND submitted_at IS NULL AND expires_at <= ?
+                """,
+                (slug, row["id"], now.isoformat()),
+            )
+            taken = conn.execute(
+                "SELECT 1 FROM signups WHERE slug = ? AND id != ? AND submitted_at IS NULL",
+                (slug, row["id"]),
+            ).fetchone()
+            if taken:
+                raise SlugTakenError("Этот поддомен уже занят")
+            conn.execute(
+                """
+                UPDATE signups
+                SET slug = ?, password_hash = ?, email_verified_at = COALESCE(email_verified_at, ?)
+                WHERE id = ?
+                """,
+                (slug, hash_password(password), now.isoformat(), row["id"]),
+            )
+        return self._signup_view(token)
+
+    def complete_signup(
+        self,
+        token: str,
+        *,
+        widget_title: str,
+        widget_description: str,
+        primary_color: str,
+        prompt_path: str,
+    ) -> Tenant:
+        title = widget_title.strip()
+        description = widget_description.strip()
+        if not title or len(title) > MAX_WIDGET_TITLE:
+            raise PlatformError("Укажите название в шапке виджета, не длиннее 120 символов")
+        if len(description) > MAX_WIDGET_DESCRIPTION:
+            raise PlatformError("Описание виджета длиннее 150 символов")
+        color = normalize_web_color(primary_color)
+        now = datetime.now(UTC)
+        stamp = now.isoformat()
+        with self._lock, self._session() as conn:
+            row = self._signup_row(conn, token, now=now, allow_finished=False)
+            slug = (row["slug"] or "").strip()
+            if not slug or not row["password_hash"]:
+                raise PlatformError("Сначала укажите адрес и пароль")
+            if conn.execute("SELECT 1 FROM tenants WHERE slug = ?", (slug,)).fetchone():
+                raise SlugTakenError("Этот поддомен уже занят")
+            if conn.execute("SELECT 1 FROM users WHERE email = ?", (row["email"],)).fetchone():
+                raise EmailTakenError("Этот email уже зарегистрирован")
+            cursor = conn.execute(
+                """
+                INSERT INTO tenants (slug, name, status, collection_name, prompt_path, created_at)
+                VALUES (?, ?, 'pending', ?, ?, ?)
+                """,
+                (slug, row["name"], f"tenant_{slug}", prompt_path, stamp),
+            )
+            tenant_id = int(cursor.lastrowid)
+            conn.execute(
+                """
+                INSERT INTO users (tenant_id, email, password_hash, created_at, phone)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (tenant_id, row["email"], row["password_hash"], stamp, row["phone"]),
+            )
+            self._insert_default_settings(
+                conn,
+                tenant_id,
+                title=title,
+                description=description,
+                primary_color=color,
+            )
+            conn.execute(
+                """
+                UPDATE signups
+                SET widget_title = ?, widget_description = ?, primary_color = ?, submitted_at = ?
+                WHERE id = ?
+                """,
+                (title, description, color, stamp, row["id"]),
+            )
+        tenant = self.get(tenant_id)
+        if tenant is None:
+            raise PlatformError("Не удалось создать заявку")
+        return tenant
+
+    def _signup_row(
+        self,
+        conn: sqlite3.Connection,
+        token: str,
+        *,
+        now: datetime | None = None,
+        allow_finished: bool = True,
+    ) -> sqlite3.Row:
+        token = token.strip()
+        if not token:
+            raise PlatformError("Ссылка недействительна или устарела")
+        row = conn.execute("SELECT * FROM signups WHERE token_hash = ?", (_token_hash(token),)).fetchone()
+        if row is None:
+            raise PlatformError("Ссылка недействительна или устарела")
+        current = now or datetime.now(UTC)
+        if row["submitted_at"]:
+            if allow_finished:
+                return row
+            raise PlatformError("Заявка уже отправлена")
+        if _expired(row["expires_at"], current):
+            raise PlatformError("Ссылка недействительна или устарела")
+        return row
+
+    def _signup_view(self, token: str) -> SignupView:
+        with self._lock, self._session() as conn:
+            row = self._signup_row(conn, token)
+        if row["submitted_at"]:
+            step = "done"
+        elif row["slug"]:
+            step = "widget"
+        else:
+            step = "organization"
+        return SignupView(
+            name=row["name"],
+            phone=row["phone"],
+            email=row["email"],
+            step=step,
+            slug=row["slug"] or "",
+            expires_at=row["expires_at"],
+        )
+
     def get(self, tenant_id: int) -> Tenant | None:
         with self._lock, self._session() as conn:
             row = conn.execute(_TENANT_SQL + " WHERE t.id = ?", (tenant_id,)).fetchone()
@@ -298,8 +507,8 @@ class PlatformStore:
             )
             tenant_id = int(cursor.lastrowid)
             conn.execute(
-                "INSERT INTO users (tenant_id, email, password_hash, created_at) VALUES (?, ?, ?, ?)",
-                (tenant_id, owner_email, hash_password(password), now),
+                "INSERT INTO users (tenant_id, email, password_hash, created_at, phone) VALUES (?, ?, ?, ?, ?)",
+                (tenant_id, owner_email, hash_password(password), now, ""),
             )
             self._insert_default_settings(conn, tenant_id)
         tenant = self.get_by_slug(slug)
@@ -508,6 +717,7 @@ class PlatformStore:
         *,
         title: str = DEFAULT_TITLE,
         description: str = "Ответы по базе знаний организации",
+        primary_color: str = DEFAULT_COLOR,
     ) -> None:
         conn.execute(
             """
@@ -515,7 +725,7 @@ class PlatformStore:
                 tenant_id, title, description, primary_color, show_sources, disclaimer, legal_notes, logo_name
             ) VALUES (?, ?, ?, ?, 1, ?, '', '')
             """,
-            (tenant_id, title, description, DEFAULT_COLOR, DEFAULT_DISCLAIMER),
+            (tenant_id, title, description, primary_color, DEFAULT_DISCLAIMER),
         )
 
     @contextmanager
@@ -581,8 +791,27 @@ class PlatformStore:
                     expires_at TEXT NOT NULL,
                     used_at TEXT
                 );
+                CREATE TABLE IF NOT EXISTS signups (
+                    id INTEGER PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    phone TEXT NOT NULL,
+                    email TEXT NOT NULL UNIQUE,
+                    token_hash TEXT NOT NULL UNIQUE,
+                    expires_at TEXT NOT NULL,
+                    email_verified_at TEXT,
+                    slug TEXT,
+                    password_hash TEXT,
+                    widget_title TEXT,
+                    widget_description TEXT,
+                    primary_color TEXT,
+                    submitted_at TEXT,
+                    created_at TEXT NOT NULL
+                );
                 """
             )
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(users)")}
+            if "phone" not in columns:
+                conn.execute("ALTER TABLE users ADD COLUMN phone TEXT NOT NULL DEFAULT ''")
             self._backfill_emails(conn)
 
     def _backfill_emails(self, conn: sqlite3.Connection) -> None:
@@ -607,7 +836,8 @@ class PlatformStore:
 
 
 _TENANT_SQL = """
-    SELECT t.id, t.slug, t.name, t.status, t.collection_name, t.prompt_path, t.created_at, u.email
+    SELECT t.id, t.slug, t.name, t.status, t.collection_name, t.prompt_path, t.created_at,
+           u.email, u.phone
     FROM tenants t
     JOIN users u ON u.tenant_id = t.id
 """
@@ -623,7 +853,18 @@ def _tenant(row: sqlite3.Row) -> Tenant:
         prompt_path=row["prompt_path"],
         created_at=row["created_at"],
         email=row["email"],
+        phone=row["phone"] or "",
     )
+
+
+def _expired(value: str, now: datetime) -> bool:
+    try:
+        expires = datetime.fromisoformat(value)
+    except ValueError:
+        return True
+    if expires.tzinfo is None:
+        expires = expires.replace(tzinfo=UTC)
+    return expires < now
 
 
 def _now() -> str:

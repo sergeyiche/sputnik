@@ -11,7 +11,9 @@ from apps.api.app import deps
 from apps.api.app.config import settings
 from apps.api.app.main import app
 from packages.rag.pipeline import RAGResponse
+from packages.rag.prompts import PROJECT_ROOT
 from packages.security.admin_auth import AdminAuthService
+from tests.unit.onboarding import RecordingMailer, application_token, finish_application
 
 
 class _Rag:
@@ -20,7 +22,12 @@ class _Rag:
 
 
 @pytest.fixture()
-def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def mailer() -> RecordingMailer:
+    return RecordingMailer()
+
+
+@pytest.fixture()
+def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mailer: RecordingMailer):
     monkeypatch.setattr(settings, "platform_db_path", str(tmp_path / "platform.db"))
     monkeypatch.setattr(settings, "data_root", str(tmp_path))
     monkeypatch.setattr(settings, "platform_base_domain", "spootnik.ru")
@@ -28,6 +35,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     auth = AdminAuthService("admin", "secret")
     app.dependency_overrides[deps.get_admin_auth] = lambda: auth
     app.dependency_overrides[deps.get_rag_pipeline] = lambda: _Rag()
+    app.dependency_overrides[deps.get_mailer] = lambda: mailer
     try:
         yield TestClient(app)
     finally:
@@ -35,12 +43,8 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         deps.reset_platform_store()
 
 
-def _register(client: TestClient, slug: str) -> None:
-    response = client.post(
-        "/v1/platform/register",
-        json={"slug": slug, "name": slug, "email": f"{slug}@example.com", "password": "password1"},
-    )
-    assert response.status_code == 200, response.text
+def _register(client: TestClient, slug: str, mailer: RecordingMailer) -> None:
+    finish_application(client, mailer, slug)
 
 
 def _approve(client: TestClient, slug: str) -> None:
@@ -52,8 +56,97 @@ def _approve(client: TestClient, slug: str) -> None:
     assert approved.status_code == 200, approved.text
 
 
-def test_pending_host_does_not_answer(client: TestClient) -> None:
-    _register(client, "acme")
+def test_operator_console_is_on_the_landing_host(client: TestClient) -> None:
+    denied = client.post(
+        "/v1/platform/login",
+        headers={"host": "help.spootnik.ru"},
+        json={"username": "admin", "password": "secret"},
+    )
+    assert denied.status_code == 404
+    allowed = client.post(
+        "/v1/platform/login",
+        headers={"host": "spootnik.ru"},
+        json={"username": "admin", "password": "secret"},
+    )
+    assert allowed.status_code == 200, allowed.text
+
+
+def test_application_reaches_the_queue_only_after_both_steps(client: TestClient, mailer: RecordingMailer) -> None:
+    registered = client.post(
+        "/v1/platform/register",
+        json={"name": "Acme", "phone": "8 999 000 11 22", "email": "owner@acme.org"},
+    )
+    assert registered.status_code == 200, registered.text
+    assert registered.json() == {"status": "email_sent"}
+    assert "spootnik.ru/onboarding/?token=" in mailer.messages[0]["text"]
+    token = application_token(mailer.messages[0]["text"])
+
+    login = client.post("/v1/platform/login", json={"username": "admin", "password": "secret"})
+    assert login.status_code == 200, login.text
+    assert client.get("/v1/platform/tenants").json()["items"] == []
+
+    opened = client.get("/v1/platform/signup", params={"token": token})
+    assert opened.status_code == 200, opened.text
+    assert opened.json()["step"] == "organization"
+    assert opened.json()["phone"] == "+79990001122"
+    reopened = client.get("/v1/platform/signup", params={"token": token})
+    assert reopened.status_code == 200
+
+    taken = client.post(
+        "/v1/platform/register",
+        json={"name": "Другая", "phone": "+79990001123", "email": "owner@acme.org"},
+    )
+    assert taken.status_code == 409
+    assert len(mailer.messages) == 1
+
+    organization = client.post(
+        "/v1/platform/signup/organization",
+        json={"token": token, "slug": "acme", "password": "password1"},
+    )
+    assert organization.status_code == 200, organization.text
+    assert organization.json()["step"] == "widget"
+    assert client.get("/v1/platform/tenants").json()["items"] == []
+
+    widget = client.post(
+        "/v1/platform/signup/widget",
+        json={
+            "token": token,
+            "widget_title": "Навигатор",
+            "widget_description": "Ответы по материалам",
+            "primary_color": "#abc",
+        },
+    )
+    assert widget.status_code == 200, widget.text
+    assert widget.json()["status"] == "pending"
+    item = client.get("/v1/platform/tenants").json()["items"][0]
+    assert item["slug"] == "acme"
+    assert item["phone"] == "+79990001122"
+    assert item["status"] == "pending"
+    prompt = Path(settings.data_root) / "tenants" / "acme" / "prompt_default.md"
+    template = PROJECT_ROOT / "config" / "default_system_prompt.md"
+    assert prompt.read_text(encoding="utf-8") == template.read_text(encoding="utf-8")
+    _approve(client, "acme")
+    approved = next(row for row in client.get("/v1/platform/tenants").json()["items"] if row["slug"] == "acme")
+    assert approved["status"] == "active"
+
+
+def test_failed_letter_does_not_lock_the_mailbox(client: TestClient, mailer: RecordingMailer) -> None:
+    mailer.fail = True
+    failed = client.post(
+        "/v1/platform/register",
+        json={"name": "Acme", "phone": "+79990001122", "email": "owner@acme.org"},
+    )
+    assert failed.status_code == 502
+    mailer.fail = False
+    retried = client.post(
+        "/v1/platform/register",
+        json={"name": "Acme", "phone": "+79990001122", "email": "owner@acme.org"},
+    )
+    assert retried.status_code == 200, retried.text
+
+
+def test_pending_host_does_not_answer(client: TestClient, mailer: RecordingMailer) -> None:
+    _register(client, "acme", mailer)
     response = client.post(
         "/v1/chat",
         headers={"host": "acme.spootnik.ru"},
@@ -62,9 +155,9 @@ def test_pending_host_does_not_answer(client: TestClient) -> None:
     assert response.status_code == 404
 
 
-def test_tenants_do_not_see_each_others_files(client: TestClient) -> None:
-    _register(client, "acme")
-    _register(client, "beta")
+def test_tenants_do_not_see_each_others_files(client: TestClient, mailer: RecordingMailer) -> None:
+    _register(client, "acme", mailer)
+    _register(client, "beta", mailer)
     _approve(client, "acme")
     _approve(client, "beta")
 
@@ -95,8 +188,8 @@ def test_tenants_do_not_see_each_others_files(client: TestClient) -> None:
     assert listing.json()["items"] == []
 
 
-def test_question_is_counted_for_that_tenant(client: TestClient) -> None:
-    _register(client, "acme")
+def test_question_is_counted_for_that_tenant(client: TestClient, mailer: RecordingMailer) -> None:
+    _register(client, "acme", mailer)
     _approve(client, "acme")
     response = client.post(
         "/v1/chat",
@@ -110,8 +203,8 @@ def test_question_is_counted_for_that_tenant(client: TestClient) -> None:
     assert item["tokens_today"] == 7
 
 
-def test_suspended_tenant_keeps_files_but_closes_chat(client: TestClient) -> None:
-    _register(client, "acme")
+def test_suspended_tenant_keeps_files_but_closes_chat(client: TestClient, mailer: RecordingMailer) -> None:
+    _register(client, "acme", mailer)
     _approve(client, "acme")
     listing = client.get("/v1/platform/tenants")
     item = next(row for row in listing.json()["items"] if row["slug"] == "acme")
