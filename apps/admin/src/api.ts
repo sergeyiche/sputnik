@@ -93,6 +93,17 @@ export const api = {
 
   widget: () => request<WidgetSettings>('/widget'),
   saveWidget: (body: WidgetSettings) => request<WidgetSettings>('/widget', json('PUT', body)),
+
+  questions: () => request<{ items: StarterQuestion[] }>('/questions'),
+  addQuestion: (text: string) => request<StarterQuestion>('/questions', json('POST', { text })),
+  updateQuestion: (id: number, text: string) =>
+    request<StarterQuestion>(`/questions/${id}`, json('PUT', { text })),
+  deleteQuestion: (id: number) => request<void>(`/questions/${id}`, { method: 'DELETE' }),
+}
+
+export interface StarterQuestion {
+  id: number
+  text: string
 }
 
 export interface WidgetSettings {
@@ -100,6 +111,7 @@ export interface WidgetSettings {
   description: string
   primary_color: string
   show_sources: boolean
+  greeting: string
   disclaimer: string
   legal_notes: string
   logo_url: string

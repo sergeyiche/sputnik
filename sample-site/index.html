@@ -3,92 +3,158 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Демо — ассистент по болезни Паркинсона</title>
-  <link rel="stylesheet" href="/widget/sputnik.css?v=20261024e" />
+  <title>Спутник</title>
   <style>
     :root {
       color-scheme: light;
+      --brand: #fc7f03;
+      --brand-dark: #e06e00;
+      --brand-soft: #fff4e8;
+      --ink: #1a2332;
+      --muted: #5b6573;
     }
+    * { box-sizing: border-box; }
     body {
       margin: 0;
       font-family: Georgia, "Times New Roman", serif;
-      color: #1a2332;
+      color: var(--ink);
       background:
-        radial-gradient(circle at top right, #ffe4c8 0, transparent 40%),
-        linear-gradient(180deg, #fffaf5 0%, #fff4e8 100%);
+        radial-gradient(circle at top right, var(--brand-soft) 0, transparent 42%),
+        linear-gradient(180deg, #fffaf5 0%, var(--brand-soft) 100%);
       min-height: 100vh;
       line-height: 1.6;
     }
-    main {
-      max-width: 720px;
-      margin: 0 auto;
-      padding: 48px 24px 120px;
+    header {
+      background: var(--brand);
+      color: #fff;
+      padding: 28px 24px 32px;
     }
-    .brand {
+    header, main { width: min(720px, 100%); margin: 0 auto; }
+    header { width: 100%; }
+    .header-inner { width: min(720px, calc(100% - 48px)); margin: 0 auto; }
+    .org {
+      margin: 0 0 8px;
       font-family: system-ui, sans-serif;
-      font-size: 0.85rem;
+      font-size: 0.8rem;
       letter-spacing: 0.08em;
       text-transform: uppercase;
-      color: #fc7f03;
-      margin: 0 0 12px;
+      opacity: 0.9;
     }
-    h1 {
-      font-size: clamp(2rem, 4vw, 2.75rem);
-      line-height: 1.15;
-      margin: 0 0 16px;
-      font-weight: 700;
-    }
-    .lead {
-      font-size: 1.15rem;
-      color: #334155;
+    h1 { font-size: clamp(1.8rem, 4vw, 2.4rem); line-height: 1.15; margin: 0 0 8px; }
+    .lead { margin: 0; font-size: 1.1rem; opacity: 0.95; }
+    main { padding: 28px 24px 120px; }
+    .wait {
+      font-family: system-ui, sans-serif;
+      background: var(--brand-soft);
+      border-left: 4px solid var(--brand);
+      padding: 14px 16px;
       margin: 0 0 24px;
     }
-    .note {
+    .note, .legal {
       font-family: system-ui, sans-serif;
-      background: rgba(252, 127, 3, 0.1);
-      border-left: 4px solid #fc7f03;
-      padding: 14px 16px;
-      margin: 0 0 32px;
       font-size: 0.95rem;
+      color: var(--muted);
+      margin: 0 0 16px;
     }
-    .hint {
+    .legal-row { display: flex; gap: 10px; align-items: flex-start; }
+    .legal-help {
+      flex: none;
+      width: 28px;
+      height: 28px;
+      border: 1px solid var(--brand);
+      border-radius: 999px;
+      background: #fff;
+      color: var(--brand-dark);
+      font: 700 0.95rem/1 system-ui, sans-serif;
+      cursor: pointer;
+    }
+    dialog {
+      border: 0;
+      border-radius: 16px;
+      padding: 20px;
+      max-width: 520px;
       font-family: system-ui, sans-serif;
-      color: #64748b;
-      font-size: 0.95rem;
     }
-    code {
-      font-family: ui-monospace, monospace;
-      background: #e2e8f0;
-      padding: 0.1em 0.35em;
-      border-radius: 4px;
-    }
-    .spacer {
-      height: 60vh;
-    }
+    dialog::backdrop { background: rgba(26, 35, 50, 0.35); }
+    .missing { padding: 48px 24px; text-align: center; color: var(--muted); }
   </style>
 </head>
 <body>
-  <main>
-    <p class="brand">ИИ-Ассистент "Спутник" · демо</p>
-    <h1>Поддержка при болезни Паркинсона</h1>
-    <p class="lead">
-      Минимальная страница для проверки плавающего чата. Нажмите синюю кнопку
-      в правом нижнем углу — откроется ассистент.
-    </p>
-    <div class="note">
-      Ассистент даёт справочную информацию по материалам базы знаний и
-      <strong>не заменяет</strong> консультацию врача.
-    </div>
-    <!-- <p class="hint">
-      Виджет грузится с <code>/widget/sputnik.js</code>.
-      Запросы к API идут через nginx на тот же origin (<code>/v1/…</code>).
-    </p> -->
-    <div class="spacer" aria-hidden="true"></div>
-    <p class="hint">Прокрутите вверх — кнопка чата остаётся на месте.</p>
-  </main>
+  <p id="missing" class="missing" hidden>Организация не найдена.</p>
+  <div id="site" hidden>
+    <header>
+      <div class="header-inner">
+        <p class="org" id="org"></p>
+        <h1 id="title"></h1>
+        <p class="lead" id="description"></p>
+      </div>
+    </header>
+    <main>
+      <p class="wait" id="wait" hidden>ИИ-ассистент появится после активации</p>
+      <div class="legal-row">
+        <p class="note" id="disclaimer"></p>
+        <button class="legal-help" type="button" id="legal-open" aria-label="Подробная юридическая информация">?</button>
+      </div>
+    </main>
+  </div>
+  <dialog id="legal-dialog">
+    <p id="legal-long"></p>
+    <form method="dialog"><button type="submit">Закрыть</button></form>
+  </dialog>
+  <script>
+    function colorScheme(value) {
+      const match = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec((value || '').trim())
+      const hex = match ? match[1] : 'fc7f03'
+      const full = hex.length === 3 ? hex.split('').map((char) => char + char).join('') : hex
+      const rgb = [0, 2, 4].map((index) => Number.parseInt(full.slice(index, index + 2), 16))
+      const mix = (toward, amount) => rgb.map((channel) => Math.round(channel + (toward - channel) * amount))
+      const hexOf = (channels) => '#' + channels.map((channel) => channel.toString(16).padStart(2, '0')).join('')
+      return {
+        brand: '#' + full,
+        dark: hexOf(mix(0, 0.12)),
+        soft: hexOf(mix(255, 0.9)),
+      }
+    }
 
-  <!-- api-url пустой → same origin (через nginx proxy) -->
-  <sputnik-widget></sputnik-widget>
-  <script src="/widget/sputnik.js?v=20261024e" defer></script>
+    function loadWidget() {
+      const css = document.createElement('link')
+      css.rel = 'stylesheet'
+      css.href = '/widget/sputnik.css?v=20261030a'
+      document.head.appendChild(css)
+      const widget = document.createElement('sputnik-widget')
+      document.body.appendChild(widget)
+      const script = document.createElement('script')
+      script.src = '/widget/sputnik.js?v=20261030a'
+      script.defer = true
+      document.body.appendChild(script)
+    }
+
+    fetch('/v1/widget/config')
+      .then((response) => (response.ok ? response.json() : Promise.reject()))
+      .then((data) => {
+        const colors = colorScheme(data.primary_color)
+        const root = document.documentElement
+        root.style.setProperty('--brand', colors.brand)
+        root.style.setProperty('--brand-dark', colors.dark)
+        root.style.setProperty('--brand-soft', colors.soft)
+        document.title = data.title || data.name || 'Спутник'
+        document.getElementById('org').textContent = data.name || ''
+        document.getElementById('title').textContent = data.title || 'Спутник'
+        document.getElementById('description').textContent = data.description || ''
+        document.getElementById('disclaimer').textContent = data.disclaimer || ''
+        document.getElementById('legal-long').textContent =
+          data.legal_notes || 'Подробная информация пока не добавлена.'
+        document.getElementById('legal-open').addEventListener('click', () => {
+          document.getElementById('legal-dialog').showModal()
+        })
+        const enabled = data.status === 'active'
+        document.getElementById('wait').hidden = enabled
+        document.getElementById('site').hidden = false
+        if (enabled) loadWidget()
+      })
+      .catch(() => {
+        document.getElementById('missing').hidden = false
+      })
+  </script>
 </body>
 </html>

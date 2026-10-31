@@ -11,10 +11,11 @@ from packages.platform.anomalies import anomaly_reasons
 from packages.platform.emails import valid_email
 from packages.platform.host import resolve_host, slug_available
 from packages.platform.passwords import hash_password, verify_password
-from packages.platform.phones import normalize_phone
+from packages.platform.phones import format_phone, normalize_phone
 from packages.platform.store import (
     EmailTakenError,
     InvalidSlugError,
+    PARKINSON_GREETING,
     PlatformError,
     SlugTakenError,
     PlatformStore,
@@ -60,6 +61,7 @@ def test_register_approve_and_isolate_login(tmp_path: Path) -> None:
     assert settings.show_sources is True
     assert settings.disclaimer
     assert settings.title == "Спутник"
+    assert settings.greeting == ""
 
     named = store.register(
         slug="named",
@@ -87,6 +89,7 @@ def test_register_approve_and_isolate_login(tmp_path: Path) -> None:
             description="Ответы по материалам фонда",
             primary_color="#fc7f03",
             show_sources=True,
+            greeting="",
             disclaimer="ю" * 251,
             legal_notes="",
         )
@@ -156,8 +159,39 @@ def test_phone_keeps_plus_seven_and_ten_digits() -> None:
     assert normalize_phone("+7 (999) 000-11-22") == "+79990001122"
     assert normalize_phone("8 999 000 11 22") == "+79990001122"
     assert normalize_phone("79990001122") == "+79990001122"
+    assert normalize_phone("+7 8 999 000-11-22") == "+79990001122"
+    assert format_phone("+79990001122") == "+7 999 000-11-22"
     with pytest.raises(ValueError):
         normalize_phone("12345")
+
+
+def test_parkinson_keeps_the_fund_greeting(tmp_path: Path) -> None:
+    path = tmp_path / "platform.db"
+    store = PlatformStore(path)
+    store.register(slug="parkinson", name="Фонд", email="owner@parkinson.org", password="secret123")
+    store.register(slug="acme", name="Другая", email="owner@acme.org", password="secret123")
+    reopened = PlatformStore(path)
+    parkinson = reopened.get_by_slug("parkinson")
+    other = reopened.get_by_slug("acme")
+    assert parkinson is not None and other is not None
+    assert reopened.settings_for(parkinson.id).greeting == PARKINSON_GREETING
+    assert reopened.settings_for(other.id).greeting == ""
+
+
+def test_starter_questions_stay_on_that_tenant(tmp_path: Path) -> None:
+    store = PlatformStore(tmp_path / "platform.db")
+    acme = store.register(slug="acme", name="Фонд А", email="owner@acme.org", password="secret123")
+    beta = store.register(slug="beta", name="Фонд Б", email="owner@beta.org", password="secret123")
+    first = store.add_starter_question(acme.id, "Как к вам записаться?")
+    store.add_starter_question(acme.id, "Какие документы нужны?")
+    assert store.sample_starter_questions(beta.id, 3) == []
+    sample = store.sample_starter_questions(acme.id, 3)
+    assert set(sample) == {"Как к вам записаться?", "Какие документы нужны?"}
+    store.update_starter_question(acme.id, first.id, "Как записаться на приём?")
+    store.delete_starter_question(acme.id, first.id)
+    assert [item.text for item in store.list_starter_questions(acme.id)] == ["Какие документы нужны?"]
+    with pytest.raises(PlatformError):
+        store.add_starter_question(acme.id, "Какие документы нужны?")
 
 
 def test_signup_reserves_slug_and_creates_pending_tenant(tmp_path: Path) -> None:
@@ -169,12 +203,15 @@ def test_signup_reserves_slug_and_creates_pending_tenant(tmp_path: Path) -> None
 
     opened = store.open_signup(issued.token)
     assert opened.step == "organization"
-    assert opened.phone == "+79990001122"
+    assert opened.phone == "+7 999 000-11-22"
     again = store.open_signup(issued.token)
     assert again.email == "owner@acme.org"
 
-    saved = store.save_signup_organization(issued.token, slug="acme", password="secret123")
+    saved = store.save_signup_organization(
+        issued.token, slug="acme", password="secret123", phone="+7 900 100-00-00"
+    )
     assert saved.step == "widget"
+    assert saved.phone == "+7 900 100-00-00"
     other = store.start_signup(name="Фонд Б", phone="+79990001133", email="owner@beta.org", ttl_seconds=3600)
     with pytest.raises(SlugTakenError):
         store.save_signup_organization(other.token, slug="acme", password="secret123")
@@ -187,7 +224,7 @@ def test_signup_reserves_slug_and_creates_pending_tenant(tmp_path: Path) -> None
         prompt_path="/data/tenants/acme/prompt_default.md",
     )
     assert pending.status == "pending"
-    assert pending.phone == "+79990001122"
+    assert pending.phone == "+79001000000"
     assert store.authenticate("owner@acme.org", "secret123").id == pending.id
     settings = store.settings_for(pending.id)
     assert settings.title == "Навигатор"

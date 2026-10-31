@@ -46,13 +46,8 @@ const brandStyle = computed(() => colorScheme(brand.value))
 const heading = ref(props.title)
 const subtitle = ref('')
 const legalNotes = ref('')
+const greeting = ref('')
 const legalOpen = ref(false)
-
-const FALLBACK_SUGGESTIONS = [
-  'Чем может помочь Спутник?',
-  'Как добавить материалы организации?',
-  'Где посмотреть источники ответа?',
-]
 
 const resolvedApiUrl =
   props.apiUrl ||
@@ -72,7 +67,6 @@ const {
   sendMessage,
 } = useChat({
   apiUrl: resolvedApiUrl,
-  fallbackSuggestions: FALLBACK_SUGGESTIONS,
 })
 
 onMounted(async () => {
@@ -86,6 +80,7 @@ onMounted(async () => {
     if (typeof data.description === 'string') subtitle.value = data.description
     if (data.disclaimer) disclaimer.value = data.disclaimer
     if (typeof data.legal_notes === 'string') legalNotes.value = data.legal_notes
+    if (typeof data.greeting === 'string') greeting.value = data.greeting
     if (data.primary_color) brand.value = data.primary_color
   } catch {
     /* the widget still opens with the built-in title */
@@ -261,11 +256,8 @@ const hasMessages = computed(() => messages.value.length > 0)
 
       <div ref="messagesEl" class="pcw-messages">
         <div v-if="!hasMessages" class="pcw-empty">
-          <p>
-            Здравствуйте! Я помогу найти информацию о болезни Паркинсона на основе проверенных
-            материалов.
-          </p>
-          <div class="pcw-suggestions">
+          <p v-if="greeting">{{ greeting }}</p>
+          <div v-if="suggestions.length" class="pcw-suggestions">
             <button
               v-for="item in suggestions"
               :key="item"

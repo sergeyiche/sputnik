@@ -53,6 +53,7 @@ class OrganizationStepRequest(BaseModel):
     token: str = Field(..., min_length=8, max_length=256)
     slug: str = Field(..., min_length=2, max_length=32)
     password: str = Field(..., min_length=8, max_length=256)
+    phone: str | None = Field(default=None, min_length=10, max_length=32)
 
 
 class WidgetStepRequest(BaseModel):
@@ -201,7 +202,9 @@ def signup_organization(
     _landing_host()
     try:
         return _signup_payload(
-            store.save_signup_organization(payload.token, slug=payload.slug, password=payload.password)
+            store.save_signup_organization(
+                payload.token, slug=payload.slug, password=payload.password, phone=payload.phone
+            )
         )
     except (InvalidSlugError, SlugTakenError, PlatformError) as exc:
         raise _signup_error(exc) from exc

@@ -88,7 +88,7 @@ def test_application_reaches_the_queue_only_after_both_steps(client: TestClient,
     opened = client.get("/v1/platform/signup", params={"token": token})
     assert opened.status_code == 200, opened.text
     assert opened.json()["step"] == "organization"
-    assert opened.json()["phone"] == "+79990001122"
+    assert opened.json()["phone"] == "+7 999 000-11-22"
     reopened = client.get("/v1/platform/signup", params={"token": token})
     assert reopened.status_code == 200
 
@@ -99,9 +99,15 @@ def test_application_reaches_the_queue_only_after_both_steps(client: TestClient,
     assert taken.status_code == 409
     assert len(mailer.messages) == 1
 
+    skipped = client.post(
+        "/v1/platform/signup/widget",
+        json={"token": token, "widget_title": "Навигатор", "widget_description": "", "primary_color": "#fc7f03"},
+    )
+    assert skipped.status_code == 400
+
     organization = client.post(
         "/v1/platform/signup/organization",
-        json={"token": token, "slug": "acme", "password": "password1"},
+        json={"token": token, "slug": "acme", "password": "password1", "phone": "+7 900 100-00-00"},
     )
     assert organization.status_code == 200, organization.text
     assert organization.json()["step"] == "widget"
@@ -120,7 +126,7 @@ def test_application_reaches_the_queue_only_after_both_steps(client: TestClient,
     assert widget.json()["status"] == "pending"
     item = client.get("/v1/platform/tenants").json()["items"][0]
     assert item["slug"] == "acme"
-    assert item["phone"] == "+79990001122"
+    assert item["phone"] == "+79001000000"
     assert item["status"] == "pending"
     prompt = Path(settings.data_root) / "tenants" / "acme" / "prompt_default.md"
     template = PROJECT_ROOT / "config" / "default_system_prompt.md"
@@ -145,14 +151,68 @@ def test_failed_letter_does_not_lock_the_mailbox(client: TestClient, mailer: Rec
     assert retried.status_code == 200, retried.text
 
 
-def test_pending_host_does_not_answer(client: TestClient, mailer: RecordingMailer) -> None:
+def test_pending_host_shows_site_but_chat_stays_closed(client: TestClient, mailer: RecordingMailer) -> None:
     _register(client, "acme", mailer)
-    response = client.post(
-        "/v1/chat",
-        headers={"host": "acme.spootnik.ru"},
-        json={"message": "привет", "stream": False},
+    host = {"host": "acme.spootnik.ru"}
+    preview = client.get("/v1/widget/config", headers=host)
+    assert preview.status_code == 200, preview.text
+    body = preview.json()
+    assert body["status"] == "pending"
+    assert body["name"] == "acme"
+    assert body["title"] == "acme"
+    assert body["greeting"] == ""
+    chat = client.post("/v1/chat", headers=host, json={"message": "привет", "stream": False})
+    assert chat.status_code == 404
+    cabinet = client.post(
+        "/v1/admin/login",
+        headers=host,
+        json={"username": "acme@example.com", "password": "password1"},
     )
-    assert response.status_code == 404
+    assert cabinet.status_code == 200, cabinet.text
+
+
+def test_starter_questions_are_isolated(client: TestClient, mailer: RecordingMailer) -> None:
+    _register(client, "acme", mailer)
+    _register(client, "beta", mailer)
+    _approve(client, "acme")
+    _approve(client, "beta")
+    acme = {"host": "acme.spootnik.ru"}
+    beta = {"host": "beta.spootnik.ru"}
+    login = client.post(
+        "/v1/admin/login",
+        headers=acme,
+        json={"username": "acme@example.com", "password": "password1"},
+    )
+    assert login.status_code == 200, login.text
+    created = client.post("/v1/admin/questions", headers=acme, json={"text": "Как к вам записаться?"})
+    assert created.status_code == 200, created.text
+    client.post("/v1/admin/questions", headers=acme, json={"text": "Какие документы нужны?"})
+    listing = client.get("/v1/admin/questions", headers=acme)
+    assert {item["text"] for item in listing.json()["items"]} == {
+        "Как к вам записаться?",
+        "Какие документы нужны?",
+    }
+    shown = client.get("/v1/suggestions/starter?count=3", headers=acme)
+    assert shown.status_code == 200
+    assert set(shown.json()["suggestions"]) == {"Как к вам записаться?", "Какие документы нужны?"}
+    client.post("/v1/admin/logout", headers=acme)
+
+    empty = client.get("/v1/suggestions/starter?count=3", headers=beta)
+    assert empty.status_code == 200
+    assert empty.json()["suggestions"] == []
+    other = client.post(
+        "/v1/admin/login",
+        headers=beta,
+        json={"username": "beta@example.com", "password": "password1"},
+    )
+    assert other.status_code == 200, other.text
+    assert client.get("/v1/admin/questions", headers=beta).json()["items"] == []
+    stolen = client.put(
+        f"/v1/admin/questions/{created.json()['id']}",
+        headers=beta,
+        json={"text": "Чужой вопрос"},
+    )
+    assert stolen.status_code == 404
 
 
 def test_tenants_do_not_see_each_others_files(client: TestClient, mailer: RecordingMailer) -> None:

@@ -28,7 +28,7 @@ from apps.api.app.tenant_sessions import tenant_id_for
 from packages.integrations.mailtrap import MailtrapError, MailtrapMailer
 from packages.platform.context import scope_var, tenant_var
 from packages.platform.emails import valid_email
-from packages.platform.store import PlatformError, PlatformStore, Tenant
+from packages.platform.store import MAX_STARTER_QUESTION, PlatformError, PlatformStore, Tenant, TenantNotFoundError
 from packages.admin.ingest_jobs import IngestAlreadyRunningError, IngestJobRunner
 from packages.admin.knowledge_files import (
     FileExistsConflictError,
@@ -94,8 +94,8 @@ def require_admin(
     scope = scope_var.get()
     if scope.kind == "tenant":
         tenant = tenant_var.get()
-        if tenant is None or tenant.status != "active":
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "Организация не найдена или ещё не включена")
+        if tenant is None or tenant.status not in {"pending", "active", "suspended"}:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Организация не найдена или отклонена")
         if tenant_id_for(token) != tenant.id:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Требуется вход")
         return
@@ -154,8 +154,8 @@ def login(
 
 def _login_tenant(payload: LoginRequest, response: Response) -> MeResponse:
     tenant = tenant_var.get()
-    if tenant is None or tenant.status != "active":
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Организация не найдена или ещё не включена")
+    if tenant is None or tenant.status not in {"pending", "active", "suspended"}:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Организация не найдена или отклонена")
     owner = get_platform_store().authenticate(payload.username, payload.password)
     if owner is None or owner.id != tenant.id:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Неверный логин или пароль")
@@ -565,3 +565,58 @@ def activate_prompt(
 @router.post("/prompt/restore-default", response_model=PromptStateResponse, dependencies=[Depends(require_admin)])
 def restore_default_prompt(store: SystemPromptStore = Depends(get_system_prompt_store)) -> PromptStateResponse:
     return _apply_prompt(store, store.restore_default())
+
+
+class StarterQuestionBody(BaseModel):
+    text: str = Field(..., min_length=1, max_length=MAX_STARTER_QUESTION)
+
+
+def _question_tenant() -> Tenant:
+    tenant = tenant_var.get()
+    if tenant is None or tenant.status not in {"pending", "active", "suspended"}:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Организация не найдена или отклонена")
+    return tenant
+
+
+def _question_payload(item) -> dict:
+    return {"id": item.id, "text": item.text}
+
+
+@router.get("/questions", dependencies=[Depends(require_admin)])
+def list_questions(store: PlatformStore = Depends(get_platform_store)) -> dict:
+    items = store.list_starter_questions(_question_tenant().id)
+    return {"items": [_question_payload(item) for item in items]}
+
+
+@router.post("/questions", dependencies=[Depends(require_admin)])
+def add_question(payload: StarterQuestionBody, store: PlatformStore = Depends(get_platform_store)) -> dict:
+    try:
+        item = store.add_starter_question(_question_tenant().id, payload.text)
+    except (PlatformError, TenantNotFoundError) as exc:
+        code = status.HTTP_404_NOT_FOUND if isinstance(exc, TenantNotFoundError) else status.HTTP_400_BAD_REQUEST
+        raise HTTPException(code, str(exc)) from exc
+    return _question_payload(item)
+
+
+@router.put("/questions/{question_id}", dependencies=[Depends(require_admin)])
+def update_question(
+    question_id: int,
+    payload: StarterQuestionBody,
+    store: PlatformStore = Depends(get_platform_store),
+) -> dict:
+    try:
+        item = store.update_starter_question(_question_tenant().id, question_id, payload.text)
+    except TenantNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    except PlatformError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    return _question_payload(item)
+
+
+@router.delete("/questions/{question_id}", dependencies=[Depends(require_admin)])
+def delete_question(question_id: int, store: PlatformStore = Depends(get_platform_store)) -> Response:
+    try:
+        store.delete_starter_question(_question_tenant().id, question_id)
+    except TenantNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

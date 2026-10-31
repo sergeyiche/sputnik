@@ -12,7 +12,11 @@
     header { padding: 28px 0 8px; }
     .mark { font-weight: 700; letter-spacing: 0.04em; }
     h1 { font-size: 36px; line-height: 1.1; margin: 12px 0; }
-    form, .card { background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 18px; display: grid; gap: 10px; margin: 12px 0 48px; }
+    form:not([hidden]), .card:not([hidden]) {
+      background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 18px;
+      display: grid; gap: 10px; margin: 12px 0 48px;
+    }
+    [hidden] { display: none !important; }
     h2 { font-size: 20px; margin: 0; }
     label { display: grid; gap: 4px; font-size: 15px; }
     input { font: inherit; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
@@ -40,10 +44,11 @@
     <form id="organization" hidden>
       <h2>Организация</h2>
       <label>Название <input name="name" readonly /></label>
-      <label>Телефон <input name="phone" readonly /></label>
+      <label>Телефон <input name="phone" required inputmode="tel" placeholder="+7 900 000-00-00" /></label>
       <label>Почта <input name="email" readonly /></label>
-      <label>Адрес латиницей <input name="slug" required pattern="[a-z0-9][a-z0-9-]{0,30}[a-z0-9]" placeholder="mycompany" /></label>
-      <label>Пароль кабинета <input name="password" type="password" minlength="8" required /></label>
+      <label>Адрес латиницей <input name="slug" required pattern="[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?" placeholder="mycompany" /></label>
+      <label>Пароль кабинета <input name="password" type="password" minlength="8" required autocomplete="new-password" /></label>
+      <label>Ещё раз пароль <input name="password_again" type="password" minlength="8" required autocomplete="new-password" /></label>
       <button type="submit">Дальше</button>
       <p class="note" id="org-error"></p>
     </form>
@@ -63,7 +68,7 @@
     </form>
     <section class="card" id="done" hidden>
       <h2>Заявка принята</h2>
-      <p class="note">Поддомен включим после проверки. До этого чат на нём не отвечает.</p>
+      <p class="note">Страница на поддомене уже открыта. Чат появится после проверки.</p>
     </section>
   </main>
   <script>
@@ -87,7 +92,12 @@
     }
 
     function detail(data) {
-      return (data && data.detail) || 'Не удалось сохранить'
+      if (!data || data.detail == null) return 'Не удалось сохранить'
+      if (typeof data.detail === 'string') return data.detail
+      if (Array.isArray(data.detail) && data.detail[0]) {
+        return data.detail[0].msg || data.detail[0].message || 'Не удалось сохранить'
+      }
+      return 'Не удалось сохранить'
     }
 
     async function load() {
@@ -121,6 +131,10 @@
       event.preventDefault()
       const error = document.getElementById('org-error')
       error.textContent = ''
+      if (organization.elements.password.value !== organization.elements.password_again.value) {
+        error.textContent = 'Пароли не совпадают'
+        return
+      }
       const response = await fetch('/v1/platform/signup/organization', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -128,6 +142,7 @@
           token,
           slug: organization.elements.slug.value,
           password: organization.elements.password.value,
+          phone: organization.elements.phone.value,
         }),
       })
       const data = await response.json().catch(() => ({}))

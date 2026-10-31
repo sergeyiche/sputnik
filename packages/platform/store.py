@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import random
 import secrets
 import sqlite3
 import threading
@@ -14,7 +16,7 @@ from pathlib import Path
 from packages.platform.emails import valid_email
 from packages.platform.host import slug_available
 from packages.platform.passwords import hash_password, verify_password
-from packages.platform.phones import normalize_phone
+from packages.platform.phones import format_phone, normalize_phone
 
 DEFAULT_DISCLAIMER = (
     "Этот ассистент предоставляет общую справочную информацию и не заменяет консультацию специалиста."
@@ -26,6 +28,11 @@ MAX_WIDGET_TITLE = 120
 MAX_WIDGET_DESCRIPTION = 150
 MAX_DISCLAIMER = 250
 MAX_LEGAL_NOTES = 3000
+MAX_STARTER_QUESTION = 240
+MAX_GREETING = 500
+PARKINSON_GREETING = (
+    "Здравствуйте! Я помогу найти информацию о болезни Паркинсона на основе проверенных материалов."
+)
 
 
 def normalize_web_color(value: str) -> str:
@@ -80,9 +87,16 @@ class WidgetSettings:
     description: str
     primary_color: str
     show_sources: bool
+    greeting: str
     disclaimer: str
     legal_notes: str
     logo_name: str
+
+
+@dataclass(frozen=True)
+class StarterQuestion:
+    id: int
+    text: str
 
 
 @dataclass(frozen=True)
@@ -327,12 +341,19 @@ class PlatformStore:
                 )
         return self._signup_view(token)
 
-    def save_signup_organization(self, token: str, *, slug: str, password: str) -> SignupView:
+    def save_signup_organization(
+        self, token: str, *, slug: str, password: str, phone: str | None = None
+    ) -> SignupView:
         slug = slug.strip().lower()
         if len(slug) < 2 or not slug_available(slug):
             raise InvalidSlugError("Такой адрес поддомена использовать нельзя")
         if len(password) < 8 or len(password) > 256:
             raise PlatformError("Пароль должен быть не короче 8 символов")
+        if phone is not None:
+            try:
+                phone = normalize_phone(phone)
+            except ValueError as exc:
+                raise PlatformError(str(exc)) from exc
         now = datetime.now(UTC)
         with self._lock, self._session() as conn:
             row = self._signup_row(conn, token, now=now, allow_finished=False)
@@ -351,13 +372,15 @@ class PlatformStore:
             ).fetchone()
             if taken:
                 raise SlugTakenError("Этот поддомен уже занят")
+            if phone is None:
+                phone = row["phone"]
             conn.execute(
                 """
                 UPDATE signups
-                SET slug = ?, password_hash = ?, email_verified_at = COALESCE(email_verified_at, ?)
+                SET slug = ?, password_hash = ?, phone = ?, email_verified_at = COALESCE(email_verified_at, ?)
                 WHERE id = ?
                 """,
-                (slug, hash_password(password), now.isoformat(), row["id"]),
+                (slug, hash_password(password), phone, now.isoformat(), row["id"]),
             )
         return self._signup_view(token)
 
@@ -455,9 +478,13 @@ class PlatformStore:
             step = "widget"
         else:
             step = "organization"
+        try:
+            phone = format_phone(row["phone"])
+        except ValueError:
+            phone = row["phone"]
         return SignupView(
             name=row["name"],
-            phone=row["phone"],
+            phone=phone,
             email=row["email"],
             step=step,
             slug=row["slug"] or "",
@@ -541,6 +568,69 @@ class PlatformStore:
             raise PlatformError("Сначала подтвердите заявку")
         return self._set_status(tenant_id, "active" if enabled else "suspended")
 
+    def list_starter_questions(self, tenant_id: int) -> list[StarterQuestion]:
+        with self._lock, self._session() as conn:
+            rows = conn.execute(
+                "SELECT id, text FROM starter_questions WHERE tenant_id = ? ORDER BY id",
+                (tenant_id,),
+            ).fetchall()
+        return [StarterQuestion(id=int(row["id"]), text=row["text"]) for row in rows]
+
+    def sample_starter_questions(
+        self, tenant_id: int, count: int, rng: random.Random | None = None
+    ) -> list[str]:
+        pool = [item.text for item in self.list_starter_questions(tenant_id)]
+        if count <= 0 or not pool:
+            return []
+        return (rng or random).sample(pool, min(count, len(pool)))
+
+    def add_starter_question(self, tenant_id: int, text: str) -> StarterQuestion:
+        text = _starter_text(text)
+        with self._lock, self._session() as conn:
+            if self.get(tenant_id) is None:
+                raise TenantNotFoundError("Организация не найдена")
+            if conn.execute(
+                "SELECT 1 FROM starter_questions WHERE tenant_id = ? AND text = ?",
+                (tenant_id, text),
+            ).fetchone():
+                raise PlatformError("Такой вопрос уже есть")
+            cursor = conn.execute(
+                "INSERT INTO starter_questions (tenant_id, text, created_at) VALUES (?, ?, ?)",
+                (tenant_id, text, _now()),
+            )
+            question_id = int(cursor.lastrowid)
+        return StarterQuestion(id=question_id, text=text)
+
+    def update_starter_question(self, tenant_id: int, question_id: int, text: str) -> StarterQuestion:
+        text = _starter_text(text)
+        with self._lock, self._session() as conn:
+            row = conn.execute(
+                "SELECT id FROM starter_questions WHERE id = ? AND tenant_id = ?",
+                (question_id, tenant_id),
+            ).fetchone()
+            if row is None:
+                raise TenantNotFoundError("Вопрос не найден")
+            taken = conn.execute(
+                "SELECT 1 FROM starter_questions WHERE tenant_id = ? AND text = ? AND id != ?",
+                (tenant_id, text, question_id),
+            ).fetchone()
+            if taken:
+                raise PlatformError("Такой вопрос уже есть")
+            conn.execute(
+                "UPDATE starter_questions SET text = ? WHERE id = ? AND tenant_id = ?",
+                (text, question_id, tenant_id),
+            )
+        return StarterQuestion(id=question_id, text=text)
+
+    def delete_starter_question(self, tenant_id: int, question_id: int) -> None:
+        with self._lock, self._session() as conn:
+            deleted = conn.execute(
+                "DELETE FROM starter_questions WHERE id = ? AND tenant_id = ?",
+                (question_id, tenant_id),
+            ).rowcount
+        if not deleted:
+            raise TenantNotFoundError("Вопрос не найден")
+
     def settings_for(self, tenant_id: int) -> WidgetSettings:
         with self._lock, self._session() as conn:
             row = conn.execute("SELECT * FROM widget_settings WHERE tenant_id = ?", (tenant_id,)).fetchone()
@@ -552,6 +642,7 @@ class PlatformStore:
             description=row["description"],
             primary_color=row["primary_color"],
             show_sources=bool(row["show_sources"]),
+            greeting=row["greeting"] or "",
             disclaimer=row["disclaimer"],
             legal_notes=row["legal_notes"],
             logo_name=row["logo_name"],
@@ -565,12 +656,14 @@ class PlatformStore:
         description: str,
         primary_color: str,
         show_sources: bool,
+        greeting: str,
         disclaimer: str,
         legal_notes: str,
         logo_name: str | None = None,
     ) -> WidgetSettings:
         title = title.strip()
         description = description.strip()
+        greeting = greeting.strip()
         disclaimer = disclaimer.strip()
         legal_notes = legal_notes.strip()
         if not title:
@@ -579,6 +672,8 @@ class PlatformStore:
             raise PlatformError("Название виджета длиннее 120 символов")
         if len(description) > MAX_WIDGET_DESCRIPTION:
             raise PlatformError("Описание виджета длиннее 150 символов")
+        if len(greeting) > MAX_GREETING:
+            raise PlatformError(f"Приветствие длиннее {MAX_GREETING} символов")
         if not disclaimer:
             raise PlatformError("Укажите юридическую информацию")
         if len(disclaimer) > MAX_DISCLAIMER:
@@ -592,13 +687,14 @@ class PlatformStore:
                 description,
                 primary_color,
                 int(show_sources),
+                greeting,
                 disclaimer,
                 legal_notes,
             ]
             sql = """
                 UPDATE widget_settings
                 SET title = ?, description = ?, primary_color = ?, show_sources = ?,
-                    disclaimer = ?, legal_notes = ?
+                    greeting = ?, disclaimer = ?, legal_notes = ?
             """
             if logo_name is not None:
                 sql += ", logo_name = ?"
@@ -722,8 +818,9 @@ class PlatformStore:
         conn.execute(
             """
             INSERT INTO widget_settings (
-                tenant_id, title, description, primary_color, show_sources, disclaimer, legal_notes, logo_name
-            ) VALUES (?, ?, ?, ?, 1, ?, '', '')
+                tenant_id, title, description, primary_color, show_sources,
+                greeting, disclaimer, legal_notes, logo_name
+            ) VALUES (?, ?, ?, ?, 1, '', ?, '', '')
             """,
             (tenant_id, title, description, primary_color, DEFAULT_DISCLAIMER),
         )
@@ -768,6 +865,7 @@ class PlatformStore:
                     description TEXT NOT NULL,
                     primary_color TEXT NOT NULL,
                     show_sources INTEGER NOT NULL,
+                    greeting TEXT NOT NULL DEFAULT '',
                     disclaimer TEXT NOT NULL,
                     legal_notes TEXT NOT NULL,
                     logo_name TEXT NOT NULL DEFAULT ''
@@ -791,6 +889,13 @@ class PlatformStore:
                     expires_at TEXT NOT NULL,
                     used_at TEXT
                 );
+                CREATE TABLE IF NOT EXISTS starter_questions (
+                    id INTEGER PRIMARY KEY,
+                    tenant_id INTEGER NOT NULL REFERENCES tenants(id),
+                    text TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE (tenant_id, text)
+                );
                 CREATE TABLE IF NOT EXISTS signups (
                     id INTEGER PRIMARY KEY,
                     name TEXT NOT NULL,
@@ -812,7 +917,12 @@ class PlatformStore:
             columns = {row[1] for row in conn.execute("PRAGMA table_info(users)")}
             if "phone" not in columns:
                 conn.execute("ALTER TABLE users ADD COLUMN phone TEXT NOT NULL DEFAULT ''")
+            widget_columns = {row[1] for row in conn.execute("PRAGMA table_info(widget_settings)")}
+            if "greeting" not in widget_columns:
+                conn.execute("ALTER TABLE widget_settings ADD COLUMN greeting TEXT NOT NULL DEFAULT ''")
             self._backfill_emails(conn)
+            self._seed_parkinson_questions(conn)
+            self._seed_parkinson_greeting(conn)
 
     def _backfill_emails(self, conn: sqlite3.Connection) -> None:
         """Fill owners that have no real mailbox. The address is required."""
@@ -833,6 +943,52 @@ class PlatformStore:
                 email = f"{row['slug']}-{row['user_id']}@spootnik.local"
             taken.add(email)
             conn.execute("UPDATE users SET email = ? WHERE id = ?", (email, row["user_id"]))
+
+    def _seed_parkinson_questions(self, conn: sqlite3.Connection) -> None:
+        """Copy the fund catalog into the parkinson account once, so it stays isolated."""
+        row = conn.execute("SELECT id FROM tenants WHERE slug = 'parkinson'").fetchone()
+        if row is None:
+            return
+        tenant_id = int(row["id"])
+        if conn.execute(
+            "SELECT 1 FROM starter_questions WHERE tenant_id = ?", (tenant_id,)
+        ).fetchone():
+            return
+        catalog = Path(__file__).resolve().parents[2] / "config" / "starter_questions.json"
+        if not catalog.is_file():
+            return
+        try:
+            payload = json.loads(catalog.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return
+        raw = payload.get("questions") if isinstance(payload, dict) else payload
+        if not isinstance(raw, list):
+            return
+        stamp = _now()
+        seen: set[str] = set()
+        for item in raw:
+            try:
+                text = _starter_text(str(item))
+            except PlatformError:
+                continue
+            if text in seen:
+                continue
+            seen.add(text)
+            conn.execute(
+                "INSERT INTO starter_questions (tenant_id, text, created_at) VALUES (?, ?, ?)",
+                (tenant_id, text, stamp),
+            )
+
+    def _seed_parkinson_greeting(self, conn: sqlite3.Connection) -> None:
+        conn.execute(
+            """
+            UPDATE widget_settings
+            SET greeting = ?
+            WHERE greeting = ''
+              AND tenant_id = (SELECT id FROM tenants WHERE slug = 'parkinson')
+            """,
+            (PARKINSON_GREETING,),
+        )
 
 
 _TENANT_SQL = """
@@ -865,6 +1021,15 @@ def _expired(value: str, now: datetime) -> bool:
     if expires.tzinfo is None:
         expires = expires.replace(tzinfo=UTC)
     return expires < now
+
+
+def _starter_text(value: str) -> str:
+    text = value.strip()
+    if not text:
+        raise PlatformError("Укажите текст вопроса")
+    if len(text) > MAX_STARTER_QUESTION:
+        raise PlatformError(f"Вопрос длиннее {MAX_STARTER_QUESTION} символов")
+    return text
 
 
 def _now() -> str:

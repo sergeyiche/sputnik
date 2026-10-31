@@ -90,9 +90,9 @@ export function useChat(options: UseChatOptions) {
       if (!response.ok) throw new Error(`HTTP ${response.status}`)
       const data = await response.json()
       const items = Array.isArray(data?.suggestions) ? data.suggestions : []
-      suggestions.value = items.length ? items : fallbackSuggestions
+      suggestions.value = items
     } catch {
-      suggestions.value = fallbackSuggestions
+      suggestions.value = []
     }
   }
 

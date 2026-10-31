@@ -71,7 +71,7 @@ curl -s http://localhost:8000/v1/knowledge/status | python3 -m json.tool
 
 Ожидаем `chunk_count > 0`, в поле `documents` — список проиндексированных файлов.
 
-Стартовые вопросы-подсказки виджета (случайные из `config/starter_questions.json`, файл перечитывается при изменении — перезапуск не нужен):
+Стартовые вопросы виджета берутся из базы этой организации (`GET /v1/suggestions/starter?count=3`). Если вопросов нет, список пустой и виджет не показывает блок примеров. Каталог `config/starter_questions.json` остаётся запасным только для режима без поддомена; для фонда он один раз копируется в аккаунт `parkinson`.
 
 ```bash
 curl -s "http://localhost:8000/v1/suggestions/starter?count=3" | python3 -m json.tool

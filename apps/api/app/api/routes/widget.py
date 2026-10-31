@@ -14,7 +14,7 @@ from apps.api.app.deps import drop_tenant_pipeline, get_platform_store
 from apps.api.app.deps import _data_root
 from packages.platform.context import scope_var, tenant_var
 from packages.platform.layout import layout_for
-from packages.platform.store import PlatformError, PlatformStore
+from packages.platform.store import MAX_GREETING, PlatformError, PlatformStore
 
 router = APIRouter(tags=["widget"])
 
@@ -24,14 +24,26 @@ class WidgetSettingsBody(BaseModel):
     description: str = Field(default="", max_length=150)
     primary_color: str = Field(default="#fc7f03", max_length=16)
     show_sources: bool = True
+    greeting: str = Field(default="", max_length=MAX_GREETING)
     disclaimer: str = Field(..., min_length=1, max_length=250)
     legal_notes: str = Field(default="", max_length=3000)
 
 
-def _active():
+_CABINET = frozenset({"pending", "active", "suspended"})
+
+
+def _present():
+    """Any organization that already has a subdomain, including a pending one."""
     tenant = tenant_var.get()
-    if scope_var.get().kind != "tenant" or tenant is None or tenant.status != "active":
-        raise HTTPException(404, "Организация не найдена или ещё не включена")
+    if scope_var.get().kind != "tenant" or tenant is None:
+        raise HTTPException(404, "Организация не найдена")
+    return tenant
+
+
+def _cabinet():
+    tenant = _present()
+    if tenant.status not in _CABINET:
+        raise HTTPException(404, "Организация не найдена или отклонена")
     return tenant
 
 
@@ -39,10 +51,13 @@ def _public(store: PlatformStore, tenant) -> dict:
     settings_row = store.settings_for(tenant.id)
     origin = f"https://{tenant.slug}.{settings.platform_base_domain}"
     return {
+        "name": tenant.name,
+        "status": tenant.status,
         "title": settings_row.title,
         "description": settings_row.description,
         "primary_color": settings_row.primary_color,
         "show_sources": settings_row.show_sources,
+        "greeting": settings_row.greeting,
         "disclaimer": settings_row.disclaimer,
         "legal_notes": settings_row.legal_notes,
         "logo_url": f"{origin}/v1/widget/logo" if settings_row.logo_name else "",
@@ -57,12 +72,12 @@ def _public(store: PlatformStore, tenant) -> dict:
 
 @router.get("/v1/widget/config")
 def widget_config(store: PlatformStore = Depends(get_platform_store)) -> dict:
-    return _public(store, _active())
+    return _public(store, _present())
 
 
 @router.get("/v1/widget/logo")
 def widget_logo(store: PlatformStore = Depends(get_platform_store)) -> FileResponse:
-    tenant = _active()
+    tenant = _present()
     row = store.settings_for(tenant.id)
     if not row.logo_name:
         raise HTTPException(404, "Логотип не задан")
@@ -74,12 +89,12 @@ def widget_logo(store: PlatformStore = Depends(get_platform_store)) -> FileRespo
 
 @router.get("/v1/admin/widget", dependencies=[Depends(require_admin)])
 def get_widget(store: PlatformStore = Depends(get_platform_store)) -> dict:
-    return _public(store, _active())
+    return _public(store, _cabinet())
 
 
 @router.put("/v1/admin/widget", dependencies=[Depends(require_admin)])
 def put_widget(payload: WidgetSettingsBody, store: PlatformStore = Depends(get_platform_store)) -> dict:
-    tenant = _active()
+    tenant = _cabinet()
     try:
         store.update_settings(
             tenant.id,
@@ -87,6 +102,7 @@ def put_widget(payload: WidgetSettingsBody, store: PlatformStore = Depends(get_p
             description=payload.description,
             primary_color=payload.primary_color,
             show_sources=payload.show_sources,
+            greeting=payload.greeting,
             disclaimer=payload.disclaimer,
             legal_notes=payload.legal_notes,
         )
@@ -101,7 +117,7 @@ async def upload_logo(
     file: UploadFile = File(...),
     store: PlatformStore = Depends(get_platform_store),
 ) -> dict:
-    tenant = _active()
+    tenant = _cabinet()
     suffix = Path(file.filename or "logo.png").suffix.lower()
     if suffix not in {".png", ".jpg", ".jpeg", ".webp", ".svg"}:
         raise HTTPException(400, "Логотип: png, jpg, webp или svg")
@@ -117,6 +133,7 @@ async def upload_logo(
         description=current.description,
         primary_color=current.primary_color,
         show_sources=current.show_sources,
+        greeting=current.greeting,
         disclaimer=current.disclaimer,
         legal_notes=current.legal_notes,
         logo_name=name,

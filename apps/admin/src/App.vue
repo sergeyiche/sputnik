@@ -6,9 +6,10 @@ import LoginForm from './components/LoginForm.vue'
 import PlatformConsole from './components/PlatformConsole.vue'
 import PromptTab from './components/PromptTab.vue'
 import SourcesTab from './components/SourcesTab.vue'
+import QuestionsTab from './components/QuestionsTab.vue'
 import WidgetTab from './components/WidgetTab.vue'
 
-type Tab = 'sources' | 'import' | 'prompt' | 'widget'
+type Tab = 'sources' | 'import' | 'prompt' | 'questions' | 'widget'
 
 const operatorConsole = window.location.pathname.startsWith('/console')
 
@@ -16,6 +17,7 @@ const TABS: { id: Tab; label: string }[] = [
   { id: 'sources', label: 'База знаний' },
   { id: 'import', label: 'Импорт' },
   { id: 'prompt', label: 'Промпт' },
+  { id: 'questions', label: 'Вопросы' },
   { id: 'widget', label: 'Виджет' },
 ]
 
@@ -101,6 +103,7 @@ onMounted(async () => {
       <SourcesTab v-if="activeTab === 'sources'" />
       <ImportTab v-else-if="activeTab === 'import'" />
       <PromptTab v-else-if="activeTab === 'prompt'" />
+      <QuestionsTab v-else-if="activeTab === 'questions'" />
       <WidgetTab v-else />
     </main>
   </div>
