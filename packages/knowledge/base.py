@@ -41,3 +41,7 @@ class VectorStore(ABC):
     def list_documents(self) -> list[str]:
         """Return unique document names currently stored in the index."""
         ...
+
+    def chunks_for_sources(self, sources: list[str], *, limit_per: int = 1) -> list[RetrievedChunk]:
+        """Return up to ``limit_per`` chunks for each document name (skill retrieval boost)."""
+        return []

@@ -1,4 +1,4 @@
-"""In-memory session store for anonymous chat (cookie-based session_id)."""
+"""In-memory stand-in for tests. The API stores dialogues in ``packages.dialogue.store``."""
 
 from __future__ import annotations
 

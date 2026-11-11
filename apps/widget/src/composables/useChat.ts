@@ -68,10 +68,12 @@ export function useChat(options: UseChatOptions) {
   const messages = ref<ChatMessage[]>([])
   const isOpen = ref(false)
   const isLoading = ref(false)
+  const restoring = ref(true)
   const error = ref<string | null>(null)
   const suggestions = ref<string[]>([])
   const fallbackSuggestions = options.fallbackSuggestions ?? []
   const suggestionCount = options.suggestionCount ?? 3
+  let historyToken = 0
 
   function apiBase(): string {
     return resolveApiUrl(options.apiUrl)
@@ -96,41 +98,85 @@ export function useChat(options: UseChatOptions) {
     }
   }
 
-  function toggle() {
-    isOpen.value = !isOpen.value
-    if (isOpen.value && !messages.value.length && !suggestions.value.length) {
+  function showSuggestionsIfEmpty() {
+    if (isOpen.value && !restoring.value && !messages.value.length && !suggestions.value.length) {
       loadStarterSuggestions()
     }
   }
 
+  function toggle() {
+    isOpen.value = !isOpen.value
+    showSuggestionsIfEmpty()
+  }
+
   function open() {
     isOpen.value = true
-    if (!messages.value.length && !suggestions.value.length) {
-      loadStarterSuggestions()
-    }
+    showSuggestionsIfEmpty()
   }
 
   function close() {
     isOpen.value = false
   }
 
+  function rememberSession(id: unknown) {
+    if (typeof id === 'string' && id) localStorage.setItem(SESSION_KEY, id)
+  }
+
   function clearChat() {
+    historyToken += 1
     messages.value = []
     error.value = null
-    fetch(`${apiBase()}/v1/session`, {
-      method: 'DELETE',
-      credentials: 'omit',
-      headers: sessionHeaders(false),
-    }).catch(() => {})
+    restoring.value = false
+    localStorage.setItem(SESSION_KEY, newSessionId())
+    suggestions.value = []
     loadStarterSuggestions()
   }
+
+  async function loadHistory() {
+    const token = ++historyToken
+    restoring.value = true
+    try {
+      const response = await fetch(`${apiBase()}/v1/session`, {
+        credentials: 'omit',
+        headers: sessionHeaders(false),
+      })
+      if (token !== historyToken) return
+      if (!response.ok) return
+      const data = await response.json()
+      rememberSession(data?.session_id)
+      const items = Array.isArray(data?.messages) ? data.messages : []
+      if (messages.value.length) return
+      messages.value = items
+        .filter(
+          (item: { role?: string; content?: unknown }) =>
+            (item?.role === 'user' || item?.role === 'assistant') && typeof item.content === 'string',
+        )
+        .map((item: { role: 'user' | 'assistant'; content: string; sources?: ChatSource[] }) => ({
+          id: generateId(),
+          role: item.role,
+          content: item.content,
+          sources: Array.isArray(item.sources) ? item.sources : [],
+        }))
+    } catch {
+      /* the panel stays empty and the next message starts from what the server still has */
+    } finally {
+      if (token === historyToken) {
+        restoring.value = false
+        showSuggestionsIfEmpty()
+      }
+    }
+  }
+
+  const historyReady = loadHistory()
 
   async function sendMessage(text: string) {
     const trimmed = text.trim()
     if (!trimmed || isLoading.value) return
+    await historyReady
 
     error.value = null
     isLoading.value = true
+    suggestions.value = []
 
     const userMsg: ChatMessage = {
       id: generateId(),
@@ -168,9 +214,14 @@ export function useChat(options: UseChatOptions) {
       }
 
       const data = await response.json()
+      rememberSession(data?.session_id)
       assistantMsg.content = data.answer || 'Пустой ответ от сервера.'
       assistantMsg.sources = Array.isArray(data.sources) ? data.sources : []
       assistantMsg.streaming = false
+      const next = Array.isArray(data.suggestions) ? data.suggestions : []
+      suggestions.value = next
+        .filter((item: unknown): item is string => typeof item === 'string' && item.trim().length > 0)
+        .slice(0, suggestionCount)
     } catch (e) {
       assistantMsg.content =
         'Не удалось получить ответ. Проверьте подключение к API и попробуйте снова.'
@@ -185,6 +236,7 @@ export function useChat(options: UseChatOptions) {
     messages,
     isOpen,
     isLoading,
+    restoring,
     error,
     suggestions,
     sourceUrl,

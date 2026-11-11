@@ -7,10 +7,11 @@ import PlatformConsole from './components/PlatformConsole.vue'
 import PromptTab from './components/PromptTab.vue'
 import SourcesTab from './components/SourcesTab.vue'
 import QuestionsTab from './components/QuestionsTab.vue'
+import SessionsTab from './components/SessionsTab.vue'
+import SkillsTab from './components/SkillsTab.vue'
 import WidgetTab from './components/WidgetTab.vue'
 
-type Tab = 'sources' | 'import' | 'prompt' | 'questions' | 'widget'
-
+type Tab = 'sources' | 'import' | 'prompt' | 'questions' | 'skills' | 'widget' | 'sessions'
 const operatorConsole = window.location.pathname.startsWith('/console')
 
 const TABS: { id: Tab; label: string }[] = [
@@ -18,7 +19,9 @@ const TABS: { id: Tab; label: string }[] = [
   { id: 'import', label: 'Импорт' },
   { id: 'prompt', label: 'Промпт' },
   { id: 'questions', label: 'Вопросы' },
+  { id: 'skills', label: 'Навыки' },
   { id: 'widget', label: 'Виджет' },
+  { id: 'sessions', label: 'Сессии' },
 ]
 
 const username = ref<string | null>(null)
@@ -104,7 +107,9 @@ onMounted(async () => {
       <ImportTab v-else-if="activeTab === 'import'" />
       <PromptTab v-else-if="activeTab === 'prompt'" />
       <QuestionsTab v-else-if="activeTab === 'questions'" />
-      <WidgetTab v-else />
+      <SkillsTab v-else-if="activeTab === 'skills'" />
+      <WidgetTab v-else-if="activeTab === 'widget'" />
+      <SessionsTab v-else />
     </main>
   </div>
 </template>
@@ -147,6 +152,7 @@ onMounted(async () => {
   gap: 4px;
   flex: 1;
   align-self: stretch;
+  overflow-x: auto;
 }
 
 .tabs__item {

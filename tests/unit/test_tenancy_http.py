@@ -17,7 +17,7 @@ from tests.unit.onboarding import RecordingMailer, application_token, finish_app
 
 
 class _Rag:
-    def query(self, message: str, history: list) -> RAGResponse:
+    def query(self, message: str, history: list | None = None, **kwargs: object) -> RAGResponse:
         return RAGResponse(answer="ok", sources=[], chunks_used=0, tokens_in=3, tokens_out=4)
 
 
@@ -261,6 +261,51 @@ def test_question_is_counted_for_that_tenant(client: TestClient, mailer: Recordi
     item = next(row for row in listing.json()["items"] if row["slug"] == "acme")
     assert item["questions_today"] == 1
     assert item["tokens_today"] == 7
+
+
+def test_widget_sessions_stay_inside_the_tenant(client: TestClient, mailer: RecordingMailer) -> None:
+    _register(client, "acme", mailer)
+    _register(client, "beta", mailer)
+    _approve(client, "acme")
+    _approve(client, "beta")
+    acme_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    beta_id = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+    acme_chat = client.post(
+        "/v1/chat",
+        headers={"host": "acme.spootnik.ru", "x-session-id": acme_id},
+        json={"message": "Как к вам записаться?", "stream": False},
+    )
+    assert acme_chat.status_code == 200, acme_chat.text
+    beta_chat = client.post(
+        "/v1/chat",
+        headers={"host": "beta.spootnik.ru", "x-session-id": beta_id},
+        json={"message": "Секретный вопрос беты", "stream": False},
+    )
+    assert beta_chat.status_code == 200, beta_chat.text
+
+    login = client.post(
+        "/v1/admin/login",
+        headers={"host": "acme.spootnik.ru"},
+        json={"username": "acme@example.com", "password": "password1"},
+    )
+    assert login.status_code == 200, login.text
+    listing = client.get("/v1/admin/sessions", headers={"host": "acme.spootnik.ru"})
+    assert listing.status_code == 200, listing.text
+    previews = [item["preview"] for item in listing.json()["items"]]
+    assert previews == ["Как к вам записаться?"]
+    stolen = client.get(f"/v1/admin/sessions/{beta_id}", headers={"host": "acme.spootnik.ru"})
+    assert stolen.status_code == 404
+    own = client.get(f"/v1/admin/sessions/{acme_id}", headers={"host": "acme.spootnik.ru"})
+    assert own.status_code == 200, own.text
+    assert own.json()["messages"][0]["content"] == "Как к вам записаться?"
+
+    restored = client.get(
+        "/v1/session",
+        headers={"host": "acme.spootnik.ru", "x-session-id": acme_id},
+    )
+    assert restored.status_code == 200, restored.text
+    assert restored.json()["message_count"] == 2
+    assert restored.json()["messages"][1]["content"].startswith("ok")
 
 
 def test_suspended_tenant_keeps_files_but_closes_chat(client: TestClient, mailer: RecordingMailer) -> None:

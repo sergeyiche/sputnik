@@ -155,7 +155,7 @@ curl -s http://localhost:8000/v1/knowledge/status | python3 -m json.tool
 
 ### Новая сессия
 
-Cookie сохраняем в файл для последующих запросов:
+Идентификатор можно передать заголовком `X-Session-Id` (так делает виджет) или cookie. `GET /v1/session` возвращает уже сохранённые реплики и не создаёт пустую сессию. Cookie сохраняем в файл для последующих запросов:
 
 ```bash
 COOKIE_JAR=/tmp/parkinson-session.txt
@@ -227,7 +227,9 @@ curl -s -c "$COOKIE_JAR" -b "$COOKIE_JAR" \
   | python3 -m json.tool
 ```
 
-### Очистка сессии
+### Новый диалог
+
+`DELETE /v1/session` не стирает переписку: она остаётся для вкладки «Сессии». Чтобы начать заново, передайте другой `X-Session-Id`.
 
 ```bash
 curl -s -c "$COOKIE_JAR" -b "$COOKIE_JAR" \

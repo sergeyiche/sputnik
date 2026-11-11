@@ -69,4 +69,6 @@ window.ParkinsonChatWidget.mount(document.querySelector('#chat'), {
 - Entry prod: `src/embed.ts` → IIFE `sputnik.js`
 - Entry dev: `src/main.ts` + `index.html`
 - UI: `src/components/FloatingChat.vue`
-- API: `POST /v1/chat` (`stream: false`), `DELETE /v1/session`, заголовок `X-Session-Id`
+- API: `POST /v1/chat` (`stream: false`), `GET /v1/session`, заголовок `X-Session-Id`
+- Идентификатор диалога хранится в `localStorage` (`sputnik_session`). После обновления страницы виджет забирает реплики через `GET /v1/session`. Сервер пишет переписку в SQLite без срока давности.
+- «Очистить» выпускает новый идентификатор и начинает пустой диалог. Прежняя переписка остаётся во вкладке «Сессии» кабинета организации.

@@ -47,4 +47,17 @@ def test_build_rag_user_message_includes_guards() -> None:
     assert "не выдавай сведения вне контекста" in msg.lower() or "Не выдавай сведения вне контекста" in msg
     assert "Что такое БП?" in msg
     assert "a.txt" in msg
+    assert "другой теме" in msg
     assert "Не добавляй факты, которых нет в контексте" not in msg
+
+
+def test_build_rag_user_message_carries_topic_and_meaning() -> None:
+    msg = build_rag_user_message(
+        "а как их снизить?",
+        "контекст",
+        topic="леводопа",
+        meaning="как снизить побочные эффекты леводопы",
+    )
+    assert "Тема диалога: леводопа" in msg
+    assert "Смысл реплики с учётом диалога: как снизить побочные эффекты леводопы" in msg
+    assert "Вопрос пользователя: а как их снизить?" in msg

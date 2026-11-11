@@ -19,6 +19,8 @@ DEFAULT_PROMPT_PATH = PROJECT_ROOT / "config" / "default_system_prompt.md"
 USER_RAG_INSTRUCTIONS = """\
 Ответь на вопрос пользователя.
 - Сначала опирайся на фрагменты контекста ниже. Используй лишь те, которые реально относятся к вопросу; остальное игнорируй.
+- Текущая реплика может быть коротким уточнением предыдущего разговора. Местоимения и недосказанность разрешай по истории диалога и по строкам «Тема диалога» и «Смысл реплики». Отвечай на ту же тему.
+- Фрагменты базы знаний, которые относятся к другой теме, игнорируй и не строй по ним ответ.
 - Если в контексте недостаточно сведений для ответа — и только тогда — дополни ответ устоявшимися авторитетными сведениями модели. Если и их недостаточно, можно опереться на общеизвестные публичные сведения. Явно отдели эту часть от материалов фонда. Не пиши, что поиск в интернете только что выполнен, и не добавляй новые ссылки.
 - Не выдавай сведения вне контекста за цитату из базы знаний и не ставь на них номера документов.
 - Если контекст пуст или не по теме, не выдумывай, что он что-то содержит.
@@ -84,18 +86,34 @@ def reload_system_prompt() -> str:
     return get_system_prompt()
 
 
-def build_rag_user_message(question: str, context: str, *, cite_sources: bool = True) -> str:
+def build_rag_user_message(
+    question: str,
+    context: str,
+    *,
+    cite_sources: bool = True,
+    topic: str = "",
+    meaning: str = "",
+) -> str:
     instructions = USER_RAG_INSTRUCTIONS
     if not cite_sources:
         instructions += (
             "\n- Не ставь номера документов и не перечисляй источники: "
             "для этой организации показ источников выключен.\n"
         )
-    return (
-        f"{instructions}\n\n"
-        f"Контекст из базы знаний:\n\n{context}\n\n"
-        f"Вопрос пользователя: {question}"
-    )
+    parts = [
+        instructions,
+        "",
+        "Контекст из базы знаний:",
+        "",
+        context,
+        "",
+    ]
+    if topic.strip():
+        parts.append(f"Тема диалога: {topic.strip()}")
+    if meaning.strip():
+        parts.append(f"Смысл реплики с учётом диалога: {meaning.strip()}")
+    parts.append(f"Вопрос пользователя: {question}")
+    return "\n".join(parts)
 
 
 def strip_trailing_disclaimer(text: str) -> str:

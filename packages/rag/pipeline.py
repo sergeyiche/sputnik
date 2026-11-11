@@ -20,6 +20,7 @@ from packages.rag.prompts import (
 from packages.security.disclaimer import MEDICAL_DISCLAIMER, append_disclaimer, is_suspicious_query
 
 EMPTY_CONTEXT = "Релевантных фрагментов базы знаний по этому вопросу нет."
+HISTORY_MESSAGES = 8
 
 
 def _token_usage(response: object) -> tuple[int, int]:
@@ -47,6 +48,7 @@ class RAGResponse:
     chunks_used: int
     tokens_in: int = 0
     tokens_out: int = 0
+    skills: list[dict] | None = None
 
 
 class RAGPipeline:
@@ -67,6 +69,10 @@ class RAGPipeline:
         self._prompt_text = prompt_text or get_system_prompt
         self._disclaimer = disclaimer or MEDICAL_DISCLAIMER
         self._show_sources = show_sources
+
+    @property
+    def llm(self) -> BaseChatModel:
+        return self._llm
 
     def _describe_source(self, document: str) -> dict:
         if self._source_catalog is None:
@@ -118,33 +124,21 @@ class RAGPipeline:
         ]
         return cleaned, sources
 
-    def _retrieval_query(self, question: str, history: list[dict[str, str]] | None) -> str:
-        """Enrich short follow-ups with the previous user turn for better search."""
-        q = question.strip()
-        if not history:
-            return q
-        prev_user = next(
-            (m["content"].strip() for m in reversed(history) if m.get("role") == "user" and m.get("content")),
-            "",
-        )
-        if not prev_user or prev_user == q:
-            return q
-        # Keep retrieval query compact
-        if len(q) < 80:
-            return f"{prev_user}\n{q}"
-        return q
-
-    def _retrieve(self, question: str, history: list[dict[str, str]] | None) -> list[RetrievedChunk]:
+    def _retrieve(
+        self,
+        query: str,
+        *,
+        boost_sources: list[str] | None = None,
+    ) -> list[RetrievedChunk]:
         fetch_k = max(self._top_k, int(os.getenv("RAG_FETCH_K", str(self._top_k * 2))))
         max_distance = os.getenv("RAG_MAX_DISTANCE", "").strip()
-        query = self._retrieval_query(question, history)
         chunks = self._vector_store.similarity_search(query, k=fetch_k)
 
         if max_distance:
             try:
                 limit = float(max_distance)
                 # Chroma/LangChain scores here are distances — lower is better
-                chunks = [c for c in chunks if c.score <= limit]
+                chunks = [c for c in chunks if c.score is not None and c.score <= limit]
             except ValueError:
                 pass
 
@@ -168,13 +162,26 @@ class RAGPipeline:
                 if len(selected) >= self._top_k:
                     break
 
+        if boost_sources:
+            present = {chunk.source for chunk in selected}
+            missing = [name for name in boost_sources if name not in present]
+            if missing:
+                boosted = self._vector_store.chunks_for_sources(missing, limit_per=1)
+                # Prepend boosted docs so they get citation numbers when used
+                for chunk in reversed(boosted):
+                    if chunk.source in present:
+                        continue
+                    selected.insert(0, chunk)
+                    present.add(chunk.source)
+                selected = selected[: max(self._top_k, len(present))]
+
         return selected
 
     def _history_messages(self, history: list[dict[str, str]] | None) -> list[BaseMessage]:
         messages: list[BaseMessage] = []
         if not history:
             return messages
-        for msg in history[-6:]:
+        for msg in history[-HISTORY_MESSAGES:]:
             content = (msg.get("content") or "").strip()
             if not content:
                 continue
@@ -189,29 +196,61 @@ class RAGPipeline:
         question: str,
         chunks: list[RetrievedChunk],
         history: list[dict[str, str]] | None,
+        *,
+        topic: str = "",
+        meaning: str = "",
+        system_prompt: str | None = None,
     ) -> list[BaseMessage]:
         context = self._format_context(chunks) if chunks else EMPTY_CONTEXT
         return [
-            SystemMessage(content=self._prompt_text()),
+            SystemMessage(content=system_prompt if system_prompt is not None else self._prompt_text()),
             *self._history_messages(history),
-            HumanMessage(content=build_rag_user_message(question, context, cite_sources=self._show_sources)),
+            HumanMessage(
+                content=build_rag_user_message(
+                    question,
+                    context,
+                    cite_sources=self._show_sources,
+                    topic=topic,
+                    meaning=meaning,
+                )
+            ),
         ]
 
     def query(
         self,
         question: str,
         history: list[dict[str, str]] | None = None,
+        *,
+        search_query: str | None = None,
+        topic: str = "",
+        meaning: str = "",
+        system_prompt: str | None = None,
+        boost_sources: list[str] | None = None,
+        skills: list[dict] | None = None,
     ) -> RAGResponse:
         if is_suspicious_query(question):
             return RAGResponse(
                 answer=append_disclaimer(SUSPICIOUS_ANSWER, self._disclaimer),
                 sources=[],
                 chunks_used=0,
+                skills=skills or [],
             )
 
-        chunks = self._retrieve(question, history)
+        chunks = self._retrieve(
+            (search_query or question).strip(),
+            boost_sources=boost_sources,
+        )
 
-        response = self._llm.invoke(self._build_messages(question, chunks, history))
+        response = self._llm.invoke(
+            self._build_messages(
+                question,
+                chunks,
+                history,
+                topic=topic,
+                meaning=meaning,
+                system_prompt=system_prompt,
+            )
+        )
         answer_text = response.content if isinstance(response.content, str) else str(response.content)
         answer_text, sources = self._finalize_answer(answer_text, chunks)
         tokens_in, tokens_out = _token_usage(response)
@@ -222,12 +261,20 @@ class RAGPipeline:
             chunks_used=len(chunks),
             tokens_in=tokens_in,
             tokens_out=tokens_out,
+            skills=skills or [],
         )
 
     async def astream_query(
         self,
         question: str,
         history: list[dict[str, str]] | None = None,
+        *,
+        search_query: str | None = None,
+        topic: str = "",
+        meaning: str = "",
+        system_prompt: str | None = None,
+        boost_sources: list[str] | None = None,
+        skills: list[dict] | None = None,
     ):
         """Async generator for SSE: yields text tokens, then a final ``{"sources": [...]}`` dict.
 
@@ -237,10 +284,22 @@ class RAGPipeline:
             yield append_disclaimer(SUSPICIOUS_ANSWER, self._disclaimer)
             return
 
-        chunks = self._retrieve(question, history)
+        chunks = self._retrieve(
+            (search_query or question).strip(),
+            boost_sources=boost_sources,
+        )
 
         full_text = ""
-        async for token in self._llm.astream(self._build_messages(question, chunks, history)):
+        async for token in self._llm.astream(
+            self._build_messages(
+                question,
+                chunks,
+                history,
+                topic=topic,
+                meaning=meaning,
+                system_prompt=system_prompt,
+            )
+        ):
             if token.content:
                 text = token.content if isinstance(token.content, str) else str(token.content)
                 full_text += text
@@ -248,4 +307,4 @@ class RAGPipeline:
 
         yield f"\n\n---\n{self._disclaimer}"
         _, sources = self._finalize_answer(full_text, chunks)
-        yield {"sources": sources}
+        yield {"sources": sources, "skills": skills or []}

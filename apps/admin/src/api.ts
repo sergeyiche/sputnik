@@ -99,11 +99,101 @@ export const api = {
   updateQuestion: (id: number, text: string) =>
     request<StarterQuestion>(`/questions/${id}`, json('PUT', { text })),
   deleteQuestion: (id: number) => request<void>(`/questions/${id}`, { method: 'DELETE' }),
+
+  skills: () => request<{ items: SkillItem[] }>('/skills'),
+  createSkill: (body: SkillWriteBody) => request<SkillItem>('/skills', json('POST', body)),
+  updateSkill: (id: number, body: SkillWriteBody) =>
+    request<SkillItem>(`/skills/${id}`, json('PATCH', body)),
+  deleteSkill: (id: number) => request<void>(`/skills/${id}`, { method: 'DELETE' }),
+  seedSkills: () => request<{ created: SkillItem[]; count: number }>('/skills/seed', { method: 'POST' }),
+  previewSkills: (question: string) =>
+    request<{ question: string; skills: SkillMatch[] }>('/skills/preview', json('POST', { question })),
+  setSkillEnabled: (id: number, enabled: boolean) =>
+    request<SkillItem>(`/skills/${id}`, json('PATCH', { enabled })),
+
+  sessions: (before?: string) => {
+    const params = new URLSearchParams()
+    if (before) params.set('before', before)
+    const query = params.toString()
+    return request<SessionList>(`/sessions${query ? `?${query}` : ''}`)
+  },
+  session: (id: string) => request<SessionTranscript>(`/sessions/${encodeURIComponent(id)}`),
 }
 
 export interface StarterQuestion {
   id: number
   text: string
+}
+
+export interface SkillItem {
+  id: number
+  name: string
+  title: string
+  type: string
+  activation: string
+  description: string
+  body: string
+  priority: number
+  sticky_turns: number
+  enabled: boolean
+  retrieval_boost: string[]
+  query_hints: string[]
+  allowed_tools: string[]
+  config: Record<string, unknown>
+  examples: string[]
+}
+
+export interface SkillWriteBody {
+  name?: string
+  title?: string
+  type?: string
+  activation?: string
+  description?: string
+  body?: string
+  priority?: number
+  sticky_turns?: number
+  enabled?: boolean
+  retrieval_boost?: string[]
+  query_hints?: string[]
+  allowed_tools?: string[]
+  config?: Record<string, unknown>
+  examples?: string[]
+}
+
+export interface SkillMatch {
+  name: string
+  title: string
+  type: string
+  score: number
+  sticky: boolean
+}
+
+export interface SessionSummary {
+  session_id: string
+  created_at: string
+  updated_at: string
+  preview: string
+  message_count: number
+}
+
+export interface SessionList {
+  items: SessionSummary[]
+  next_before: string | null
+}
+
+export interface SessionTranscriptMessage {
+  role: string
+  content: string
+  sources: { index?: number; title?: string; url?: string | null }[]
+  created_at: string
+}
+
+export interface SessionTranscript {
+  session_id: string
+  created_at: string
+  updated_at: string
+  topic: string
+  messages: SessionTranscriptMessage[]
 }
 
 export interface WidgetSettings {

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import random
+import re
 import secrets
 import sqlite3
 import threading
@@ -12,11 +13,14 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from packages.platform.emails import valid_email
 from packages.platform.host import slug_available
 from packages.platform.passwords import hash_password, verify_password
 from packages.platform.phones import format_phone, normalize_phone
+from packages.skills.models import ACTIVATIONS, NAME_PATTERN, SKILL_TYPES, Skill, SkillExample
+from packages.skills.seeds import PARKINSON_SKILL_SEEDS
 
 DEFAULT_DISCLAIMER = (
     "Этот ассистент предоставляет общую справочную информацию и не заменяет консультацию специалиста."
@@ -196,6 +200,8 @@ class PlatformStore:
         tenant = self.get_by_slug(slug)
         if tenant is None:
             raise PlatformError("Не удалось создать заявку")
+        if slug == "parkinson":
+            self.seed_parkinson_skills(tenant.id)
         return tenant
 
     def authenticate(self, email: str, password: str) -> Tenant | None:
@@ -541,6 +547,8 @@ class PlatformStore:
         tenant = self.get_by_slug(slug)
         if tenant is None:
             raise PlatformError("Не удалось создать организацию")
+        if slug == "parkinson":
+            self.seed_parkinson_skills(tenant.id)
         return tenant
 
     def rename_slug(self, old_slug: str, new_slug: str) -> Tenant | None:
@@ -630,6 +638,226 @@ class PlatformStore:
             ).rowcount
         if not deleted:
             raise TenantNotFoundError("Вопрос не найден")
+
+    # --- skills -------------------------------------------------------------------------
+
+    def skills_revision(self, tenant_id: int) -> int:
+        """Monotonic-ish cache key: changes when any skill or example row changes."""
+        with self._lock, self._session() as conn:
+            row = conn.execute(
+                """
+                SELECT COALESCE(MAX(s.id), 0) + COALESCE(MAX(s.updated_at), '')
+                       || COUNT(s.id) || ':' || COUNT(e.id)
+                AS rev
+                FROM skills s
+                LEFT JOIN skill_examples e ON e.skill_id = s.id
+                WHERE s.tenant_id = ?
+                """,
+                (tenant_id,),
+            ).fetchone()
+        return hash(str(row["rev"] if row else "")) & 0x7FFFFFFF
+
+    def list_skills(self, tenant_id: int, *, enabled_only: bool = False) -> list[Skill]:
+        with self._lock, self._session() as conn:
+            sql = "SELECT * FROM skills WHERE tenant_id = ?"
+            if enabled_only:
+                sql += " AND enabled = 1"
+            sql += " ORDER BY priority DESC, name"
+            rows = conn.execute(sql, (tenant_id,)).fetchall()
+            return [self._skill_from_row(conn, row) for row in rows]
+
+    def get_skill(self, tenant_id: int, skill_id: int) -> Skill:
+        with self._lock, self._session() as conn:
+            row = conn.execute(
+                "SELECT * FROM skills WHERE id = ? AND tenant_id = ?",
+                (skill_id, tenant_id),
+            ).fetchone()
+            if row is None:
+                raise TenantNotFoundError("Навык не найден")
+            return self._skill_from_row(conn, row)
+
+    def create_skill(self, tenant_id: int, payload: dict[str, Any]) -> Skill:
+        fields = _validate_skill_payload(payload, partial=False)
+        with self._lock, self._session() as conn:
+            if self.get(tenant_id) is None:
+                raise TenantNotFoundError("Организация не найдена")
+            if conn.execute(
+                "SELECT 1 FROM skills WHERE tenant_id = ? AND name = ?",
+                (tenant_id, fields["name"]),
+            ).fetchone():
+                raise PlatformError(f"Навык «{fields['name']}» уже есть")
+            stamp = _now()
+            cursor = conn.execute(
+                """
+                INSERT INTO skills (
+                    tenant_id, name, title, skill_type, activation, description, body,
+                    priority, sticky_turns, enabled, retrieval_boost, query_hints,
+                    allowed_tools, config, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    tenant_id,
+                    fields["name"],
+                    fields["title"],
+                    fields["skill_type"],
+                    fields["activation"],
+                    fields["description"],
+                    fields["body"],
+                    fields["priority"],
+                    fields["sticky_turns"],
+                    1 if fields["enabled"] else 0,
+                    json.dumps(fields["retrieval_boost"], ensure_ascii=False),
+                    json.dumps(fields["query_hints"], ensure_ascii=False),
+                    json.dumps(fields["allowed_tools"], ensure_ascii=False),
+                    json.dumps(fields["config"], ensure_ascii=False),
+                    stamp,
+                    stamp,
+                ),
+            )
+            skill_id = int(cursor.lastrowid)
+            self._replace_examples(conn, skill_id, fields.get("examples") or [])
+            return self._skill_from_row(
+                conn,
+                conn.execute("SELECT * FROM skills WHERE id = ?", (skill_id,)).fetchone(),
+            )
+
+    def update_skill(self, tenant_id: int, skill_id: int, payload: dict[str, Any]) -> Skill:
+        fields = _validate_skill_payload(payload, partial=True)
+        with self._lock, self._session() as conn:
+            row = conn.execute(
+                "SELECT * FROM skills WHERE id = ? AND tenant_id = ?",
+                (skill_id, tenant_id),
+            ).fetchone()
+            if row is None:
+                raise TenantNotFoundError("Навык не найден")
+            if "name" in fields and fields["name"] != row["name"]:
+                taken = conn.execute(
+                    "SELECT 1 FROM skills WHERE tenant_id = ? AND name = ? AND id != ?",
+                    (tenant_id, fields["name"], skill_id),
+                ).fetchone()
+                if taken:
+                    raise PlatformError(f"Навык «{fields['name']}» уже есть")
+            columns = {
+                "name": "name",
+                "title": "title",
+                "skill_type": "skill_type",
+                "activation": "activation",
+                "description": "description",
+                "body": "body",
+                "priority": "priority",
+                "sticky_turns": "sticky_turns",
+            }
+            sets: list[str] = []
+            values: list[Any] = []
+            for key, column in columns.items():
+                if key in fields:
+                    sets.append(f"{column} = ?")
+                    values.append(fields[key])
+            if "enabled" in fields:
+                sets.append("enabled = ?")
+                values.append(1 if fields["enabled"] else 0)
+            for key in ("retrieval_boost", "query_hints", "allowed_tools", "config"):
+                if key in fields:
+                    sets.append(f"{key} = ?")
+                    values.append(json.dumps(fields[key], ensure_ascii=False))
+            if sets:
+                sets.append("updated_at = ?")
+                values.append(_now())
+                values.extend([skill_id, tenant_id])
+                conn.execute(
+                    f"UPDATE skills SET {', '.join(sets)} WHERE id = ? AND tenant_id = ?",
+                    values,
+                )
+            if "examples" in fields:
+                self._replace_examples(conn, skill_id, fields["examples"] or [])
+                conn.execute(
+                    "UPDATE skills SET updated_at = ? WHERE id = ? AND tenant_id = ?",
+                    (_now(), skill_id, tenant_id),
+                )
+            return self._skill_from_row(
+                conn,
+                conn.execute(
+                    "SELECT * FROM skills WHERE id = ? AND tenant_id = ?",
+                    (skill_id, tenant_id),
+                ).fetchone(),
+            )
+
+    def delete_skill(self, tenant_id: int, skill_id: int) -> None:
+        with self._lock, self._session() as conn:
+            conn.execute("DELETE FROM skill_examples WHERE skill_id = ?", (skill_id,))
+            deleted = conn.execute(
+                "DELETE FROM skills WHERE id = ? AND tenant_id = ?",
+                (skill_id, tenant_id),
+            ).rowcount
+        if not deleted:
+            raise TenantNotFoundError("Навык не найден")
+
+    def seed_parkinson_skills(self, tenant_id: int) -> list[Skill]:
+        """Idempotent seed of domain templates (skip names that already exist).
+
+        For existing skills, fills empty ``config.suggestions`` from the template
+        without overwriting custom suggestion lists.
+        """
+        if self.get(tenant_id) is None:
+            raise TenantNotFoundError("Организация не найдена")
+        by_name = {skill.name: skill for skill in self.list_skills(tenant_id)}
+        created: list[Skill] = []
+        for raw in PARKINSON_SKILL_SEEDS:
+            current = by_name.get(raw["name"])
+            if current is None:
+                created.append(self.create_skill(tenant_id, raw))
+                continue
+            want = (raw.get("config") or {}).get("suggestions")
+            if not want:
+                continue
+            cfg = dict(current.config or {})
+            if cfg.get("suggestions"):
+                continue
+            cfg["suggestions"] = list(want)
+            self.update_skill(tenant_id, current.id, {"config": cfg})
+        return created
+
+    def _skill_from_row(self, conn: sqlite3.Connection, row: sqlite3.Row) -> Skill:
+        examples = conn.execute(
+            "SELECT id, text FROM skill_examples WHERE skill_id = ? ORDER BY id",
+            (row["id"],),
+        ).fetchall()
+        return Skill(
+            id=int(row["id"]),
+            tenant_id=int(row["tenant_id"]),
+            name=row["name"],
+            title=row["title"],
+            skill_type=row["skill_type"],
+            activation=row["activation"],
+            description=row["description"],
+            body=row["body"],
+            priority=int(row["priority"]),
+            sticky_turns=int(row["sticky_turns"]),
+            enabled=bool(row["enabled"]),
+            retrieval_boost=_json_list(row["retrieval_boost"]),
+            query_hints=_json_list(row["query_hints"]),
+            allowed_tools=_json_list(row["allowed_tools"]),
+            config=_json_dict(row["config"]),
+            examples=tuple(SkillExample(id=int(ex["id"]), text=ex["text"]) for ex in examples),
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+
+    @staticmethod
+    def _replace_examples(conn: sqlite3.Connection, skill_id: int, examples: list[str]) -> None:
+        conn.execute("DELETE FROM skill_examples WHERE skill_id = ?", (skill_id,))
+        seen: set[str] = set()
+        for raw in examples:
+            text = str(raw).strip()
+            if not text or text in seen:
+                continue
+            if len(text) > 500:
+                raise PlatformError("Пример длиннее 500 символов")
+            seen.add(text)
+            conn.execute(
+                "INSERT INTO skill_examples (skill_id, text) VALUES (?, ?)",
+                (skill_id, text),
+            )
 
     def settings_for(self, tenant_id: int) -> WidgetSettings:
         with self._lock, self._session() as conn:
@@ -912,6 +1140,34 @@ class PlatformStore:
                     submitted_at TEXT,
                     created_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS skills (
+                    id INTEGER PRIMARY KEY,
+                    tenant_id INTEGER NOT NULL REFERENCES tenants(id),
+                    name TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    skill_type TEXT NOT NULL DEFAULT 'domain',
+                    activation TEXT NOT NULL DEFAULT 'match',
+                    description TEXT NOT NULL,
+                    body TEXT NOT NULL,
+                    priority INTEGER NOT NULL DEFAULT 50,
+                    sticky_turns INTEGER NOT NULL DEFAULT 2,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    retrieval_boost TEXT NOT NULL DEFAULT '[]',
+                    query_hints TEXT NOT NULL DEFAULT '[]',
+                    allowed_tools TEXT NOT NULL DEFAULT '[]',
+                    config TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE (tenant_id, name)
+                );
+                CREATE INDEX IF NOT EXISTS idx_skills_tenant_enabled_type
+                    ON skills (tenant_id, enabled, skill_type);
+                CREATE TABLE IF NOT EXISTS skill_examples (
+                    id INTEGER PRIMARY KEY,
+                    skill_id INTEGER NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
+                    text TEXT NOT NULL,
+                    UNIQUE (skill_id, text)
+                );
                 """
             )
             columns = {row[1] for row in conn.execute("PRAGMA table_info(users)")}
@@ -923,6 +1179,7 @@ class PlatformStore:
             self._backfill_emails(conn)
             self._seed_parkinson_questions(conn)
             self._seed_parkinson_greeting(conn)
+            self._seed_parkinson_skills_on_init(conn)
 
     def _backfill_emails(self, conn: sqlite3.Connection) -> None:
         """Fill owners that have no real mailbox. The address is required."""
@@ -990,6 +1247,51 @@ class PlatformStore:
             (PARKINSON_GREETING,),
         )
 
+    def _seed_parkinson_skills_on_init(self, conn: sqlite3.Connection) -> None:
+        row = conn.execute("SELECT id FROM tenants WHERE slug = 'parkinson'").fetchone()
+        if row is None:
+            return
+        tenant_id = int(row["id"])
+        # Release the init connection before create_skill (it opens its own).
+        # Call after _init's with-block via deferred flag is awkward; insert inline instead.
+        existing = {
+            r["name"]
+            for r in conn.execute("SELECT name FROM skills WHERE tenant_id = ?", (tenant_id,)).fetchall()
+        }
+        stamp = _now()
+        for raw in PARKINSON_SKILL_SEEDS:
+            if raw["name"] in existing:
+                continue
+            fields = _validate_skill_payload(raw, partial=False)
+            cursor = conn.execute(
+                """
+                INSERT INTO skills (
+                    tenant_id, name, title, skill_type, activation, description, body,
+                    priority, sticky_turns, enabled, retrieval_boost, query_hints,
+                    allowed_tools, config, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    tenant_id,
+                    fields["name"],
+                    fields["title"],
+                    fields["skill_type"],
+                    fields["activation"],
+                    fields["description"],
+                    fields["body"],
+                    fields["priority"],
+                    fields["sticky_turns"],
+                    1,
+                    json.dumps(fields["retrieval_boost"], ensure_ascii=False),
+                    json.dumps(fields["query_hints"], ensure_ascii=False),
+                    json.dumps(fields["allowed_tools"], ensure_ascii=False),
+                    json.dumps(fields["config"], ensure_ascii=False),
+                    stamp,
+                    stamp,
+                ),
+            )
+            self._replace_examples(conn, int(cursor.lastrowid), fields.get("examples") or [])
+
 
 _TENANT_SQL = """
     SELECT t.id, t.slug, t.name, t.status, t.collection_name, t.prompt_path, t.created_at,
@@ -1030,6 +1332,117 @@ def _starter_text(value: str) -> str:
     if len(text) > MAX_STARTER_QUESTION:
         raise PlatformError(f"Вопрос длиннее {MAX_STARTER_QUESTION} символов")
     return text
+
+
+def _json_list(raw: str | None) -> list[str]:
+    try:
+        data = json.loads(raw or "[]")
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(data, list):
+        return []
+    return [str(item).strip() for item in data if str(item).strip()]
+
+
+def _json_dict(raw: str | None) -> dict:
+    try:
+        data = json.loads(raw or "{}")
+    except json.JSONDecodeError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _validate_skill_payload(payload: dict[str, Any], *, partial: bool) -> dict[str, Any]:
+    fields: dict[str, Any] = {}
+    required = ("name", "title", "description", "body")
+    if not partial:
+        for key in required:
+            if key not in payload or payload[key] is None:
+                raise PlatformError(f"Поле «{key}» обязательно")
+
+    if "name" in payload and payload["name"] is not None:
+        name = str(payload["name"]).strip().lower()
+        if not re.fullmatch(NAME_PATTERN, name) or len(name) > 64:
+            raise PlatformError("name: латиница, цифры и дефис, до 64 символов")
+        fields["name"] = name
+
+    if "title" in payload and payload["title"] is not None:
+        title = str(payload["title"]).strip()
+        if not title or len(title) > 120:
+            raise PlatformError("title обязателен, до 120 символов")
+        fields["title"] = title
+
+    if "description" in payload and payload["description"] is not None:
+        description = str(payload["description"]).strip()
+        if not description or len(description) > 1024:
+            raise PlatformError("description обязателен, до 1024 символов")
+        fields["description"] = description
+
+    if "body" in payload and payload["body"] is not None:
+        body = str(payload["body"]).strip()
+        if not body or len(body) > 20000:
+            raise PlatformError("body обязателен, до 20000 символов")
+        fields["body"] = body
+
+    if "skill_type" in payload or "type" in payload:
+        skill_type = str(payload.get("skill_type") or payload.get("type") or "domain").strip()
+        if skill_type not in SKILL_TYPES:
+            raise PlatformError("type: domain, context или workflow")
+        fields["skill_type"] = skill_type
+    elif not partial:
+        fields["skill_type"] = "domain"
+
+    if "activation" in payload and payload["activation"] is not None:
+        activation = str(payload["activation"]).strip()
+        if activation not in ACTIVATIONS:
+            raise PlatformError("activation: match, always, intent или manual")
+        fields["activation"] = activation
+    elif not partial:
+        fields["activation"] = "match"
+
+    if "priority" in payload and payload["priority"] is not None:
+        priority = int(payload["priority"])
+        if not 0 <= priority <= 100:
+            raise PlatformError("priority: 0–100")
+        fields["priority"] = priority
+    elif not partial:
+        fields["priority"] = 50
+
+    if "sticky_turns" in payload and payload["sticky_turns"] is not None:
+        sticky = int(payload["sticky_turns"])
+        if not 0 <= sticky <= 20:
+            raise PlatformError("sticky_turns: 0–20")
+        fields["sticky_turns"] = sticky
+    elif not partial:
+        fields["sticky_turns"] = 2
+
+    if "enabled" in payload and payload["enabled"] is not None:
+        fields["enabled"] = bool(payload["enabled"])
+    elif not partial:
+        fields["enabled"] = True
+
+    for key in ("retrieval_boost", "query_hints", "allowed_tools"):
+        if key in payload and payload[key] is not None:
+            raw = payload[key]
+            if not isinstance(raw, list):
+                raise PlatformError(f"{key} должен быть списком строк")
+            fields[key] = [str(item).strip() for item in raw if str(item).strip()]
+        elif not partial:
+            fields[key] = []
+
+    if "config" in payload and payload["config"] is not None:
+        if not isinstance(payload["config"], dict):
+            raise PlatformError("config должен быть объектом")
+        fields["config"] = payload["config"]
+    elif not partial:
+        fields["config"] = {}
+
+    if "examples" in payload and payload["examples"] is not None:
+        if not isinstance(payload["examples"], list):
+            raise PlatformError("examples должен быть списком строк")
+        fields["examples"] = [str(item).strip() for item in payload["examples"] if str(item).strip()]
+
+    return fields
 
 
 def _now() -> str:

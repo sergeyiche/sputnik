@@ -14,18 +14,23 @@ from pydantic import BaseModel, Field
 from apps.api.app.config import settings
 from apps.api.app.deps import (
     get_admin_auth,
+    get_dialogue_store,
     get_ingest_runner,
     get_knowledge_files_service,
     get_mailer,
     get_platform_store,
+    get_skill_router,
+    get_sticky_skills,
     get_system_prompt_store,
     get_vector_store,
+    invalidate_skill_router,
 )
 from apps.api.app.tenant_sessions import drop as drop_tenant_session
 from apps.api.app.tenant_sessions import drop_for_tenant
 from apps.api.app.tenant_sessions import issue as issue_tenant_session
 from apps.api.app.tenant_sessions import tenant_id_for
 from packages.integrations.mailtrap import MailtrapError, MailtrapMailer
+from packages.dialogue.store import DialogueStore
 from packages.platform.context import scope_var, tenant_var
 from packages.platform.emails import valid_email
 from packages.platform.store import MAX_STARTER_QUESTION, PlatformError, PlatformStore, Tenant, TenantNotFoundError
@@ -620,3 +625,203 @@ def delete_question(question_id: int, store: PlatformStore = Depends(get_platfor
     except TenantNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# --- skills ---------------------------------------------------------------------------
+
+
+class SkillBody(BaseModel):
+    name: str | None = None
+    title: str | None = None
+    type: str | None = None
+    skill_type: str | None = None
+    activation: str | None = None
+    description: str | None = None
+    body: str | None = None
+    priority: int | None = None
+    sticky_turns: int | None = None
+    enabled: bool | None = None
+    retrieval_boost: list[str] | None = None
+    query_hints: list[str] | None = None
+    allowed_tools: list[str] | None = None
+    config: dict | None = None
+    examples: list[str] | None = None
+
+
+class SkillPreviewBody(BaseModel):
+    question: str = Field(..., min_length=1, max_length=2000)
+
+
+def _skill_payload(skill) -> dict:
+    return {
+        "id": skill.id,
+        "name": skill.name,
+        "title": skill.title,
+        "type": skill.type,
+        "activation": skill.activation,
+        "description": skill.description,
+        "body": skill.body,
+        "priority": skill.priority,
+        "sticky_turns": skill.sticky_turns,
+        "enabled": skill.enabled,
+        "retrieval_boost": skill.retrieval_boost,
+        "query_hints": skill.query_hints,
+        "allowed_tools": skill.allowed_tools,
+        "config": skill.config,
+        "examples": [ex.text for ex in skill.examples],
+        "created_at": skill.created_at,
+        "updated_at": skill.updated_at,
+    }
+
+
+@router.get("/skills", dependencies=[Depends(require_admin)])
+def list_skills(store: PlatformStore = Depends(get_platform_store)) -> dict:
+    items = store.list_skills(_question_tenant().id)
+    return {"items": [_skill_payload(item) for item in items]}
+
+
+@router.post("/skills", dependencies=[Depends(require_admin)], status_code=status.HTTP_201_CREATED)
+def create_skill(payload: SkillBody, store: PlatformStore = Depends(get_platform_store)) -> dict:
+    tenant = _question_tenant()
+    try:
+        skill = store.create_skill(tenant.id, payload.model_dump(exclude_none=True))
+    except TenantNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    except PlatformError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    invalidate_skill_router(tenant.id)
+    return _skill_payload(skill)
+
+
+@router.get("/skills/{skill_id}", dependencies=[Depends(require_admin)])
+def get_skill(skill_id: int, store: PlatformStore = Depends(get_platform_store)) -> dict:
+    try:
+        return _skill_payload(store.get_skill(_question_tenant().id, skill_id))
+    except TenantNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+
+
+@router.patch("/skills/{skill_id}", dependencies=[Depends(require_admin)])
+def update_skill(
+    skill_id: int,
+    payload: SkillBody,
+    store: PlatformStore = Depends(get_platform_store),
+) -> dict:
+    tenant = _question_tenant()
+    try:
+        skill = store.update_skill(tenant.id, skill_id, payload.model_dump(exclude_none=True))
+    except TenantNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    except PlatformError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    invalidate_skill_router(tenant.id)
+    return _skill_payload(skill)
+
+
+@router.delete("/skills/{skill_id}", dependencies=[Depends(require_admin)])
+def delete_skill(skill_id: int, store: PlatformStore = Depends(get_platform_store)) -> Response:
+    tenant = _question_tenant()
+    try:
+        store.delete_skill(tenant.id, skill_id)
+    except TenantNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    invalidate_skill_router(tenant.id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/skills/seed", dependencies=[Depends(require_admin)])
+def seed_skills(store: PlatformStore = Depends(get_platform_store)) -> dict:
+    tenant = _question_tenant()
+    created = store.seed_parkinson_skills(tenant.id)
+    invalidate_skill_router(tenant.id)
+    return {"created": [_skill_payload(item) for item in created], "count": len(created)}
+
+
+@router.post("/skills/preview", dependencies=[Depends(require_admin)])
+def preview_skills(
+    payload: SkillPreviewBody,
+    store: PlatformStore = Depends(get_platform_store),
+) -> dict:
+    tenant = _question_tenant()
+    skills = store.list_skills(tenant.id, enabled_only=True)
+    matched = get_skill_router().match(
+        tenant.id,
+        skills,
+        payload.question,
+        sticky_names=get_sticky_skills().remaining("preview"),
+        revision=store.skills_revision(tenant.id),
+    )
+    return {
+        "question": payload.question,
+        "skills": [
+            {
+                "name": item.skill.name,
+                "title": item.skill.title,
+                "type": item.skill.type,
+                "score": round(item.score, 4),
+                "sticky": item.sticky,
+            }
+            for item in matched
+        ],
+    }
+
+
+def _dialogue_tenant_id() -> int | None:
+    if scope_var.get().kind != "tenant":
+        return None
+    tenant = tenant_var.get()
+    if tenant is None or tenant.status not in {"pending", "active", "suspended"}:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Организация не найдена или отклонена")
+    return tenant.id
+
+
+def _valid_session_id(value: str) -> bool:
+    if not 8 <= len(value) <= 64:
+        return False
+    return all(char.isalnum() or char == "-" for char in value)
+
+
+@router.get("/sessions", dependencies=[Depends(require_admin)])
+def list_sessions(
+    limit: int = Query(default=30, ge=1, le=100),
+    before: str | None = Query(default=None, max_length=160),
+    store: DialogueStore = Depends(get_dialogue_store),
+) -> dict:
+    items, next_before = store.list_sessions(tenant_id=_dialogue_tenant_id(), limit=limit, before=before)
+    return {
+        "items": [
+            {
+                "session_id": item.session_id,
+                "created_at": item.created_at,
+                "updated_at": item.updated_at,
+                "preview": item.preview,
+                "message_count": item.message_count,
+            }
+            for item in items
+        ],
+        "next_before": next_before,
+    }
+
+
+@router.get("/sessions/{session_id}", dependencies=[Depends(require_admin)])
+def read_session(session_id: str, store: DialogueStore = Depends(get_dialogue_store)) -> dict:
+    if not _valid_session_id(session_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Диалог не найден")
+    found = store.get(session_id, tenant_id=_dialogue_tenant_id())
+    if found is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Диалог не найден")
+    return {
+        "session_id": found.session_id,
+        "created_at": found.created_at,
+        "updated_at": found.updated_at,
+        "topic": found.topic,
+        "messages": [
+            {
+                "role": item.role,
+                "content": item.content,
+                "sources": item.sources,
+                "created_at": item.created_at,
+            }
+            for item in found.messages
+        ],
+    }

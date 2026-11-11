@@ -12,7 +12,7 @@ from packages.admin.prompt_store import SystemPromptStore, get_prompt_store
 from packages.platform.context import tenant_var
 from packages.platform.layout import layout_for
 from packages.platform.store import PlatformStore, Tenant
-from packages.dialogue.session import SessionStore
+from packages.dialogue.store import DialogueStore
 from packages.etl.ingest import prepare_chunks, store_chunks
 from packages.knowledge.base import VectorStore
 from packages.knowledge.chroma_store import ChromaVectorStore, replace_collection
@@ -23,8 +23,10 @@ from packages.rag.llm_factory import create_llm
 from packages.rag.pipeline import RAGPipeline
 from packages.integrations.mailtrap import MailtrapMailer
 from packages.security.admin_auth import AdminAuthService
+from packages.skills.router import SkillRouter, StickySkillState
 
-_session_store: SessionStore | None = None
+_dialogue_store: DialogueStore | None = None
+_dialogue_store_path: str | None = None
 _embeddings: Embeddings | None = None
 _embeddings_key: str | None = None
 _vector_store: VectorStore | None = None
@@ -40,14 +42,18 @@ _tenant_runners: dict[int, IngestJobRunner] = {}
 _platform_store: PlatformStore | None = None
 _platform_store_path: str | None = None
 _mailer: MailtrapMailer | None = None
+_skill_router: SkillRouter | None = None
+_skill_router_key: str | None = None
+_sticky_skills = StickySkillState()
 
 
-def get_session_store() -> SessionStore:
-    global _session_store
-    if _session_store is None:
-        max_messages = int(os.getenv("SESSION_MAX_MESSAGES", "20"))
-        _session_store = SessionStore(max_messages=max_messages)
-    return _session_store
+def get_dialogue_store() -> DialogueStore:
+    global _dialogue_store, _dialogue_store_path
+    path = str(platform_db_path())
+    if _dialogue_store is None or _dialogue_store_path != path:
+        _dialogue_store = DialogueStore(Path(path))
+        _dialogue_store_path = path
+    return _dialogue_store
 
 
 def _uses_gigachat_embeddings() -> bool:
@@ -144,10 +150,31 @@ def reset_vector_store() -> None:
 
 def reset_rag_caches() -> None:
     """Drop cached LLM/embeddings clients (e.g. after forced auth refresh)."""
-    global _embeddings, _embeddings_key
+    global _embeddings, _embeddings_key, _skill_router, _skill_router_key
     _embeddings = None
     _embeddings_key = None
+    _skill_router = None
+    _skill_router_key = None
     reset_vector_store()
+
+
+def get_skill_router() -> SkillRouter:
+    global _skill_router, _skill_router_key
+    emb_key = "gigachat" if _uses_gigachat_embeddings() else "local"
+    if _skill_router is None or _skill_router_key != emb_key:
+        _skill_router = SkillRouter(get_embeddings())
+        _skill_router_key = emb_key
+    return _skill_router
+
+
+def get_sticky_skills() -> StickySkillState:
+    return _sticky_skills
+
+
+def invalidate_skill_router(tenant_id: int) -> None:
+    router = _skill_router
+    if router is not None:
+        router.invalidate(tenant_id)
 
 
 def _knowledge_dir() -> Path:
@@ -281,10 +308,12 @@ def get_platform_store() -> PlatformStore:
 
 
 def reset_platform_store() -> None:
-    global _platform_store, _platform_store_path, _mailer
+    global _platform_store, _platform_store_path, _mailer, _dialogue_store, _dialogue_store_path
     _platform_store = None
     _platform_store_path = None
     _mailer = None
+    _dialogue_store = None
+    _dialogue_store_path = None
 
 
 def get_mailer() -> MailtrapMailer:

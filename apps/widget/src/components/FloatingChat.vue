@@ -57,6 +57,7 @@ const {
   messages,
   isOpen,
   isLoading,
+  restoring,
   error,
   suggestions,
   sourceUrl,
@@ -255,7 +256,10 @@ const hasMessages = computed(() => messages.value.length > 0)
       </header>
 
       <div ref="messagesEl" class="pcw-messages">
-        <div v-if="!hasMessages" class="pcw-empty">
+        <div v-if="restoring && !hasMessages" class="pcw-empty">
+          <p>Загрузка диалога…</p>
+        </div>
+        <div v-else-if="!hasMessages" class="pcw-empty">
           <p v-if="greeting">{{ greeting }}</p>
           <div v-if="suggestions.length" class="pcw-suggestions">
             <button
@@ -334,6 +338,22 @@ const hasMessages = computed(() => messages.value.length > 0)
           <div v-else class="pcw-bubble pcw-bubble--user">
             {{ msg.content }}
           </div>
+        </div>
+
+        <div
+          v-if="hasMessages && suggestions.length && !isLoading"
+          class="pcw-suggestions pcw-suggestions--followup"
+        >
+          <button
+            v-for="item in suggestions"
+            :key="item"
+            type="button"
+            class="pcw-suggestion"
+            :disabled="isLoading"
+            @click="askSuggestion(item)"
+          >
+            {{ item }}
+          </button>
         </div>
 
         <p v-if="error" class="pcw-error">{{ error }}</p>
@@ -582,6 +602,11 @@ const hasMessages = computed(() => messages.value.length > 0)
 .pcw-empty {
   color: #64748b;
   font-size: 0.95rem;
+}
+
+.pcw-suggestions--followup {
+  margin: 4px 0 8px;
+  padding: 0 4px;
 }
 
 .pcw-suggestions {

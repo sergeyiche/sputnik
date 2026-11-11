@@ -116,3 +116,33 @@ class ChromaVectorStore(VectorStore):
                 continue
             names.add(Path(str(raw)).name)
         return sorted(names)
+
+    def chunks_for_sources(self, sources: list[str], *, limit_per: int = 1) -> list[RetrievedChunk]:
+        collection = getattr(self._store, "_collection", None)
+        if collection is None or limit_per <= 0:
+            return []
+        results: list[RetrievedChunk] = []
+        for name in sources:
+            try:
+                data = collection.get(
+                    where={"source": name},
+                    limit=limit_per,
+                    include=["documents", "metadatas"],
+                )
+            except Exception:
+                continue
+            documents = data.get("documents") or []
+            metadatas = data.get("metadatas") or []
+            for content, meta in zip(documents, metadatas, strict=False):
+                if not content:
+                    continue
+                meta = meta or {}
+                results.append(
+                    RetrievedChunk(
+                        content=str(content),
+                        source=str(meta.get("source") or name),
+                        score=None,
+                        metadata=dict(meta),
+                    )
+                )
+        return results
