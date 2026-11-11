@@ -6,7 +6,8 @@ services:
     image: oracool-api:latest
     container_name: oracool-api
     ports:
-      - "${API_PORT:-8000}:8000"
+      # Только localhost: на сервере с ISPmanager 80/443 заняты сайтом фонда.
+      - "127.0.0.1:${API_PORT:-8000}:8000"
     env_file:
       - .env
     environment:
@@ -59,8 +60,8 @@ services:
     image: schickling/mailcatcher:latest
     container_name: oracool-mailcatcher
     ports:
-      - "1080:1080"
-      - "1025:1025"
+      - "127.0.0.1:1080:1080"
+      - "127.0.0.1:1025:1025"
     restart: unless-stopped
 
   # Одноразовая индексация: docker compose --profile tools run --rm ingest
@@ -110,7 +111,8 @@ services:
     image: oracool-widget:latest
     container_name: oracool-widget
     ports:
-      - "${WIDGET_PORT:-8080}:80"
+      # 8080 на проде занят Apache панели (127.0.0.1). Там задайте WIDGET_PORT=8088.
+      - "127.0.0.1:${WIDGET_PORT:-8080}:80"
     volumes:
       - ./apps/widget/nginx.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:

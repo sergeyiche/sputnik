@@ -793,10 +793,11 @@ class PlatformStore:
             raise TenantNotFoundError("Навык не найден")
 
     def seed_parkinson_skills(self, tenant_id: int) -> list[Skill]:
-        """Idempotent seed of domain templates (skip names that already exist).
+        """Idempotent seed of templates (create missing; refresh Russian seed texts).
 
-        For existing skills, fills empty ``config.suggestions`` from the template
-        without overwriting custom suggestion lists.
+        Existing skills keep custom suggestions unless empty. Description/title/body
+        are updated from the template when the stored description still has English
+        discovery phrases (``Use when`` / ``Use always``).
         """
         if self.get(tenant_id) is None:
             raise TenantNotFoundError("Организация не найдена")
@@ -807,14 +808,20 @@ class PlatformStore:
             if current is None:
                 created.append(self.create_skill(tenant_id, raw))
                 continue
+            patch: dict[str, Any] = {}
+            desc = current.description or ""
+            if "Use when" in desc or "Use always" in desc:
+                patch["title"] = raw["title"]
+                patch["description"] = raw["description"]
+                patch["body"] = raw["body"]
             want = (raw.get("config") or {}).get("suggestions")
-            if not want:
-                continue
-            cfg = dict(current.config or {})
-            if cfg.get("suggestions"):
-                continue
-            cfg["suggestions"] = list(want)
-            self.update_skill(tenant_id, current.id, {"config": cfg})
+            if want:
+                cfg = dict(current.config or {})
+                if not cfg.get("suggestions"):
+                    cfg["suggestions"] = list(want)
+                    patch["config"] = cfg
+            if patch:
+                self.update_skill(tenant_id, current.id, patch)
         return created
 
     def _skill_from_row(self, conn: sqlite3.Connection, row: sqlite3.Row) -> Skill:

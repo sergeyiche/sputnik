@@ -209,7 +209,7 @@ async function preview() {
 <template>
   <div class="skills">
     <p class="hint">
-      Навыки уточняют ответ и поиск. После сохранения роутер перечитывает examples.
+      Навыки уточняют ответ и поиск. После сохранения роутер заново учитывает примеры вопросов.
       В списках — по одной строке на значение.
     </p>
 
@@ -236,9 +236,9 @@ async function preview() {
           <label>
             Тип
             <select v-model="form.type">
-              <option value="domain">Тема (domain)</option>
-              <option value="context">Контекст (context)</option>
-              <option value="workflow">Сценарий (workflow)</option>
+              <option value="domain">Тема</option>
+              <option value="context">Контекст</option>
+              <option value="workflow">Сценарий</option>
             </select>
           </label>
           <label>
@@ -336,8 +336,8 @@ async function preview() {
         </form>
         <ul v-if="matches.length">
           <li v-for="m in matches" :key="m.name">
-            {{ m.title }} <code>{{ m.name }}</code> — score {{ m.score }}
-            <span v-if="m.sticky">(sticky)</span>
+            {{ m.title }} <code>{{ m.name }}</code> — совпадение {{ m.score }}
+            <span v-if="m.sticky">(удержание)</span>
           </li>
         </ul>
         <p v-else class="empty">Нет совпадений выше порога</p>
