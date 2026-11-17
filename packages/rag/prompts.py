@@ -93,8 +93,15 @@ def build_rag_user_message(
     cite_sources: bool = True,
     topic: str = "",
     meaning: str = "",
+    exact_lookup: bool = False,
 ) -> str:
     instructions = USER_RAG_INSTRUCTIONS
+    if exact_lookup:
+        instructions += (
+            "\n- В контексте есть точная выборка по фильтру (например, город). "
+            "Если пользователь просит список или контакты, перечисли всех специалистов из выборки, "
+            "не сокращай список и не отбирай только по узкой специализации.\n"
+        )
     if not cite_sources:
         instructions += (
             "\n- Не ставь номера документов и не перечисляй источники: "

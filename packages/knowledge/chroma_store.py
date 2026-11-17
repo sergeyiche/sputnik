@@ -11,7 +11,7 @@ import chromadb
 from langchain_chroma import Chroma
 from langchain_core.embeddings import Embeddings
 
-from packages.knowledge.base import RetrievedChunk, VectorStore
+from packages.knowledge.base import RetrievedChunk, VectorStore, is_conversion_header
 
 logger = logging.getLogger(__name__)
 
@@ -79,9 +79,14 @@ class ChromaVectorStore(VectorStore):
         self._store.add_texts(texts=texts, metadatas=metadatas, ids=ids)
 
     def similarity_search(self, query: str, k: int = 5) -> list[RetrievedChunk]:
-        docs_with_scores = self._store.similarity_search_with_score(query, k=k)
+        # Over-fetch: legacy indexes still contain chunks made only of the
+        # ``# source-file`` preamble. They match file-name questions strongly
+        # but carry no answer.
+        docs_with_scores = self._store.similarity_search_with_score(query, k=max(k + 4, k))
         results: list[RetrievedChunk] = []
         for doc, score in docs_with_scores:
+            if is_conversion_header(doc.page_content):
+                continue
             results.append(
                 RetrievedChunk(
                     content=doc.page_content,
@@ -90,6 +95,8 @@ class ChromaVectorStore(VectorStore):
                     metadata=dict(doc.metadata),
                 )
             )
+            if len(results) >= k:
+                break
         return results
 
     def delete_collection(self) -> None:
@@ -126,15 +133,16 @@ class ChromaVectorStore(VectorStore):
             try:
                 data = collection.get(
                     where={"source": name},
-                    limit=limit_per,
+                    limit=max(limit_per * 4, limit_per + 4),
                     include=["documents", "metadatas"],
                 )
             except Exception:
                 continue
             documents = data.get("documents") or []
             metadatas = data.get("metadatas") or []
+            added = 0
             for content, meta in zip(documents, metadatas, strict=False):
-                if not content:
+                if not content or is_conversion_header(str(content)):
                     continue
                 meta = meta or {}
                 results.append(
@@ -145,4 +153,7 @@ class ChromaVectorStore(VectorStore):
                         metadata=dict(meta),
                     )
                 )
+                added += 1
+                if added >= limit_per:
+                    break
         return results

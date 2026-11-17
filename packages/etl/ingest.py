@@ -13,7 +13,7 @@ from langchain_community.document_loaders import DirectoryLoader, TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from packages.etl.convert import is_service_file
-from packages.knowledge.base import VectorStore
+from packages.knowledge.base import VectorStore, strip_conversion_header
 from packages.knowledge.embeddings_factory import create_embeddings
 from packages.knowledge.factory import create_vector_store
 
@@ -48,7 +48,15 @@ def _load_documents(source_dir: Path):
             docs.extend(loader.load())
         except Exception:
             continue
-    return [doc for doc in docs if not is_service_file(Path(doc.metadata.get("source", "")))]
+    prepared: list = []
+    for doc in docs:
+        if is_service_file(Path(doc.metadata.get("source", ""))):
+            continue
+        doc.page_content = strip_conversion_header(doc.page_content)
+        if not doc.page_content.strip():
+            continue
+        prepared.append(doc)
+    return prepared
 
 
 def _chunk_id(source_name: str, index: int, content: str) -> str:

@@ -8,11 +8,27 @@ from typing import Any
 
 from packages.integrations.gigachat.errors import is_gigachat_auth_error
 
-FOLLOWUP_MAX_LEN = 80
-_ELLIPSIS = re.compile(
-    r"(?:^а\b)|(?:\b(?:это|почему|сколько)\b)",
+FOLLOWUP_MAX_LEN = 18
+# A short answer ("Краснодар", "а дозировку?") belongs to the current topic.
+# A short standalone question ("Что такое леводопа?") does not.
+_ANAPHORA = re.compile(
+    r"\b(?:это|эти|этого|этому|этим|этих|его|её|ее|их|они|он|она|оно|там|тогда|такой|такая|такие|так|туда)\b",
     re.IGNORECASE,
 )
+_FOLLOWUP_PHRASES = re.compile(
+    r"^\s*(?:расскажи(?:те)?\s+подробнее|продолжи(?:те)?|подробнее|"
+    r"и\s+что\s+дальше|что\s+(?:ещё|еще)\s+делать)\b",
+    re.IGNORECASE,
+)
+_STANDALONE_START = re.compile(
+    r"^\s*(?:что\s+такое|кто\s+так(?:ой|ая|ие)|где\s+(?:найти|взять|купить|записаться)|"
+    r"какие|какой|какая|какое|сколько|почему|зачем|можно\s+ли|нужно\s+ли|стоит\s+ли|"
+    r"подскажите|подскажи|расскажите|расскажи|покажите|перечислите|назовите|"
+    r"есть\s+ли|дайте|дай)\b",
+    re.IGNORECASE,
+)
+_LETTERS = re.compile(r"[^\W\d_]+", re.UNICODE)
+
 _REWRITE_SYSTEM = (
     "Ты переписываешь реплику пользователя в один самостоятельный поисковый вопрос на языке реплики. "
     "Если реплика уточняет текущую тему диалога, включи предмет темы в вопрос. "
@@ -21,14 +37,31 @@ _REWRITE_SYSTEM = (
 )
 
 
+def _letter_count(text: str) -> int:
+    return sum(len(match.group(0)) for match in _LETTERS.finditer(text))
+
+
+def _normalized(text: str) -> str:
+    return " ".join(text.casefold().replace("ё", "е").split())
+
+
 def is_followup(question: str) -> bool:
-    """A short or elliptical utterance that depends on the dialogue so far."""
-    text = question.strip()
+    """A short or elliptical utterance that depends on the dialogue so far.
+
+    Length alone is a poor signal: «Подскажите контакты специалиста» is short
+    but self-contained. Pronouns/ellipsis and a few explicit phrases are the
+    reliable markers; short utterances without them still stay on topic.
+    """
+    text = " ".join(question.strip().split())
     if not text:
         return False
-    if len(text) < FOLLOWUP_MAX_LEN:
+    if _ANAPHORA.search(text):
         return True
-    return _ELLIPSIS.search(text) is not None
+    if _FOLLOWUP_PHRASES.search(text):
+        return True
+    if _STANDALONE_START.match(text) and _letter_count(text) >= 10:
+        return False
+    return _letter_count(text) < FOLLOWUP_MAX_LEN
 
 
 def fallback_standalone(topic: str, question: str) -> str:
@@ -72,8 +105,13 @@ def resolve_turn(
             raise
         return fallback_standalone(anchor, question), anchor or question
 
-    if standalone.lower() == question.lower():
-        return fallback_standalone(anchor, question), anchor or question
+    if _normalized(standalone) == _normalized(question):
+        # The model may return the utterance unchanged because it is already a
+        # standalone question. Do not treat that as a rewrite failure: short
+        # answers ("Краснодар") still belong to the topic, longer questions do not.
+        if _letter_count(question) < FOLLOWUP_MAX_LEN:
+            return fallback_standalone(anchor, question), anchor or question
+        return question, question
     return standalone, standalone
 
 

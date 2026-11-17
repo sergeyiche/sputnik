@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import math
 import os
 import threading
@@ -10,6 +11,24 @@ from dataclasses import dataclass, field
 from langchain_core.embeddings import Embeddings
 
 from packages.skills.models import MatchedSkill, Skill
+
+logger = logging.getLogger(__name__)
+
+# Strong, deterministic intent words. They let an explicit doctor request work
+# even when its embedding score is just below the calibrated threshold.
+FIND_DOCTOR_MATCH_ANY = (
+    "врач",
+    "доктор",
+    "невролог",
+    "паркинсонолог",
+    "клиник",
+    "контакт",
+    "специалист",
+    "список врачей",
+    "к кому",
+    "обратиться",
+    "где найти",
+)
 
 
 def _dot(a: list[float], b: list[float]) -> float:
@@ -71,10 +90,28 @@ class SkillRouter:
         *,
         threshold: float | None = None,
         max_active: int | None = None,
+        margin: float | None = None,
     ) -> None:
         self._embeddings = embeddings
-        self._threshold = threshold if threshold is not None else float(
-            os.getenv("SKILLS_SCORE_THRESHOLD", "0.42")
+        # e5-family embeddings have a high cosine baseline (~0.75–0.85 even for
+        # unrelated text), so the GigaChat-oriented 0.42 threshold matches every
+        # skill on every question. Keep a provider-specific default.
+        provider = os.getenv("EMBEDDINGS_PROVIDER", "gigachat").lower()
+        default_threshold = 0.86 if provider == "local" else 0.42
+        if threshold is not None:
+            self._threshold = threshold
+        else:
+            self._threshold = float(os.getenv("SKILLS_SCORE_THRESHOLD", str(default_threshold)))
+            # A stale 0.42 from the GigaChat-era config activates all skills on
+            # e5 embeddings. Clamp it instead of silently routing everything.
+            if provider == "local" and self._threshold < 0.7:
+                logger.warning(
+                    "SKILLS_SCORE_THRESHOLD=%.2f is below the e5 baseline; using 0.86",
+                    self._threshold,
+                )
+                self._threshold = 0.86
+        self._margin = margin if margin is not None else float(
+            os.getenv("SKILLS_SCORE_MARGIN", "0.04")
         )
         self._max_active = max_active if max_active is not None else int(
             os.getenv("SKILLS_MAX_ACTIVE", "2")
@@ -127,6 +164,7 @@ class SkillRouter:
             cached = self._cache.get(tenant_id, {})
 
         query_vec = self._embeddings.embed_query(question)
+        lowered = question.casefold()
         scored: list[MatchedSkill] = []
         for skill in domain:
             example_vecs = cached.get(skill.id) or []
@@ -136,6 +174,22 @@ class SkillRouter:
             if best >= self._threshold:
                 scored.append(MatchedSkill(skill=skill, score=best, sticky=False))
 
+        # Explicit intent beats a marginal embedding score. Without this,
+        # «Какие врачи есть в Москве?» (≈0.850) falls just below the e5 threshold.
+        matched_ids = {item.skill.id for item in scored}
+        for skill in domain:
+            if skill.id in matched_ids:
+                continue
+            hints = _match_any(skill)
+            if hints and any(hint.casefold() in lowered for hint in hints):
+                scored.append(MatchedSkill(skill=skill, score=self._threshold, sticky=False))
+
+        if not scored:
+            return []
+        best_score = max(item.score for item in scored)
+        # Keep only skills close to the best match: a single question should not
+        # activate every topic that happens to clear the threshold.
+        scored = [item for item in scored if best_score - item.score <= self._margin]
         scored.sort(key=lambda item: (item.skill.priority, item.score), reverse=True)
         selected = scored[: self._max_active]
         selected_names = {item.skill.name for item in selected}
@@ -151,7 +205,17 @@ class SkillRouter:
             selected.append(MatchedSkill(skill=skill, score=0.0, sticky=True))
 
         selected.sort(key=lambda item: (item.skill.priority, item.score), reverse=True)
-        return selected[: max(self._max_active, len(selected_names))]
+        return selected[: self._max_active]
+
+
+def _match_any(skill: Skill) -> tuple[str, ...]:
+    if isinstance(skill.config, dict):
+        raw = skill.config.get("match_any")
+        if isinstance(raw, list):
+            return tuple(str(item).strip() for item in raw if str(item).strip())
+    if skill.skill_type == "domain" and skill.name == "find-doctor":
+        return FIND_DOCTOR_MATCH_ANY
+    return ()
 
 
 def enrich_search_query(base: str, matched: list[MatchedSkill]) -> str:

@@ -181,6 +181,14 @@ def _knowledge_dir() -> Path:
     return Path(os.getenv("KNOWLEDGE_DIR", "./data/knowledge"))
 
 
+def get_knowledge_dir() -> Path:
+    """Knowledge folder of the active organization (legacy folder outside tenants)."""
+    tenant = _active_tenant()
+    if tenant is not None:
+        return layout_for(_data_root(), tenant.slug).knowledge_dir
+    return _knowledge_dir()
+
+
 def _sources_dir() -> Path:
     return Path(os.getenv("KNOWLEDGE_SOURCES_DIR", "./data/knowledge_sources"))
 

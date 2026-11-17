@@ -814,12 +814,22 @@ class PlatformStore:
                 patch["title"] = raw["title"]
                 patch["description"] = raw["description"]
                 patch["body"] = raw["body"]
-            want = (raw.get("config") or {}).get("suggestions")
-            if want:
-                cfg = dict(current.config or {})
-                if not cfg.get("suggestions"):
-                    cfg["suggestions"] = list(want)
-                    patch["config"] = cfg
+            # Upgrade the old find-doctor seed without touching customised bodies.
+            if "Если списка нет в контексте" in (current.body or ""):
+                patch["body"] = raw["body"]
+            want_config = raw.get("config") or {}
+            cfg = dict(patch.get("config") or current.config or {})
+            config_changed = False
+            want_suggestions = want_config.get("suggestions")
+            if want_suggestions and not cfg.get("suggestions"):
+                cfg["suggestions"] = list(want_suggestions)
+                config_changed = True
+            want_clarify = want_config.get("clarify")
+            if want_clarify and not cfg.get("clarify"):
+                cfg["clarify"] = want_clarify
+                config_changed = True
+            if config_changed:
+                patch["config"] = cfg
             if patch:
                 self.update_skill(tenant_id, current.id, patch)
         return created

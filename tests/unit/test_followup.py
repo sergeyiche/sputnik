@@ -134,3 +134,55 @@ def test_pipeline_searches_the_resolved_question_and_names_the_topic() -> None:
     assert "Тема диалога: леводопа" in sent
     assert "Смысл реплики с учётом диалога: как снизить побочные эффекты леводопы" in sent
     assert "Вопрос пользователя: а как их снизить?" in sent
+
+
+def test_short_standalone_question_is_not_a_followup() -> None:
+    assert not is_followup("Подскажите контакты специалиста")
+    assert not is_followup("Есть ли список врачей?")
+    assert not is_followup("Что такое леводопа?")
+    assert not is_followup("Какие побочные эффекты?")
+
+
+def test_elliptical_questions_stay_followups() -> None:
+    assert is_followup("а дозировку?")
+    assert is_followup("а как их снизить?")
+    assert is_followup("Почему это происходит?")
+    assert is_followup("Расскажи подробнее")
+
+
+def test_unchanged_standalone_question_is_not_glued_to_the_previous_topic() -> None:
+    class _Echo:
+        def invoke(self, messages: list) -> _Reply:
+            return _Reply("Подскажите контакты специалиста")
+
+    history = [
+        {"role": "user", "content": "это проверенный препарат?"},
+        {"role": "assistant", "content": "Да, леводопа — проверенный препарат."},
+    ]
+    query, topic = resolve_turn(
+        _Echo(),
+        topic="это проверенный препарат?",
+        history=history,
+        question="Подскажите контакты специалиста",
+    )
+    assert query == "Подскажите контакты специалиста"
+    assert topic == "Подскажите контакты специалиста"
+
+
+def test_short_city_answer_is_glued_to_the_pending_topic() -> None:
+    class _Echo:
+        def invoke(self, messages: list) -> _Reply:
+            return _Reply("Краснодар")
+
+    history = [
+        {"role": "user", "content": "Есть ли список врачей?"},
+        {"role": "assistant", "content": "Подскажите, в каком городе вы находитесь?"},
+    ]
+    query, topic = resolve_turn(
+        _Echo(),
+        topic="Есть ли список врачей?",
+        history=history,
+        question="Краснодар",
+    )
+    assert query == "Есть ли список врачей?\nКраснодар"
+    assert topic == "Есть ли список врачей?"

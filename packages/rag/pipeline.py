@@ -129,6 +129,7 @@ class RAGPipeline:
         query: str,
         *,
         boost_sources: list[str] | None = None,
+        extra_chunks: list[RetrievedChunk] | None = None,
     ) -> list[RetrievedChunk]:
         fetch_k = max(self._top_k, int(os.getenv("RAG_FETCH_K", str(self._top_k * 2))))
         max_distance = os.getenv("RAG_MAX_DISTANCE", "").strip()
@@ -175,6 +176,13 @@ class RAGPipeline:
                     present.add(chunk.source)
                 selected = selected[: max(self._top_k, len(present))]
 
+        if extra_chunks:
+            exact_sources = {chunk.source for chunk in extra_chunks}
+            # Exact lookup rows supersede semantic chunks from the same document,
+            # otherwise top-k may mix doctors from other cities into the context.
+            selected = [chunk for chunk in selected if chunk.source not in exact_sources]
+            selected = [*extra_chunks, *selected]
+
         return selected
 
     def _history_messages(self, history: list[dict[str, str]] | None) -> list[BaseMessage]:
@@ -200,10 +208,20 @@ class RAGPipeline:
         topic: str = "",
         meaning: str = "",
         system_prompt: str | None = None,
+        exact_lookup: bool = False,
     ) -> list[BaseMessage]:
         context = self._format_context(chunks) if chunks else EMPTY_CONTEXT
+        system_text = system_prompt if system_prompt is not None else self._prompt_text()
+        if exact_lookup:
+            system_text = (
+                system_text.rstrip()
+                + "\n\n## Точная выборка\n"
+                + "В контексте — полный список специалистов по выбранному фильтру. "
+                + "Перечисли всех специалистов из этого списка, включая неврологов "
+                + "и врачей других специализаций; не сокращай его до одних «паркинсонологов».\n"
+            )
         return [
-            SystemMessage(content=system_prompt if system_prompt is not None else self._prompt_text()),
+            SystemMessage(content=system_text),
             *self._history_messages(history),
             HumanMessage(
                 content=build_rag_user_message(
@@ -212,6 +230,7 @@ class RAGPipeline:
                     cite_sources=self._show_sources,
                     topic=topic,
                     meaning=meaning,
+                    exact_lookup=exact_lookup,
                 )
             ),
         ]
@@ -226,6 +245,7 @@ class RAGPipeline:
         meaning: str = "",
         system_prompt: str | None = None,
         boost_sources: list[str] | None = None,
+        extra_chunks: list[RetrievedChunk] | None = None,
         skills: list[dict] | None = None,
     ) -> RAGResponse:
         if is_suspicious_query(question):
@@ -239,6 +259,7 @@ class RAGPipeline:
         chunks = self._retrieve(
             (search_query or question).strip(),
             boost_sources=boost_sources,
+            extra_chunks=extra_chunks,
         )
 
         response = self._llm.invoke(
@@ -249,6 +270,7 @@ class RAGPipeline:
                 topic=topic,
                 meaning=meaning,
                 system_prompt=system_prompt,
+                exact_lookup=bool(extra_chunks),
             )
         )
         answer_text = response.content if isinstance(response.content, str) else str(response.content)
@@ -274,6 +296,7 @@ class RAGPipeline:
         meaning: str = "",
         system_prompt: str | None = None,
         boost_sources: list[str] | None = None,
+        extra_chunks: list[RetrievedChunk] | None = None,
         skills: list[dict] | None = None,
     ):
         """Async generator for SSE: yields text tokens, then a final ``{"sources": [...]}`` dict.
@@ -287,6 +310,7 @@ class RAGPipeline:
         chunks = self._retrieve(
             (search_query or question).strip(),
             boost_sources=boost_sources,
+            extra_chunks=extra_chunks,
         )
 
         full_text = ""
@@ -298,6 +322,7 @@ class RAGPipeline:
                 topic=topic,
                 meaning=meaning,
                 system_prompt=system_prompt,
+                exact_lookup=bool(extra_chunks),
             )
         ):
             if token.content:

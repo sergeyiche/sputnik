@@ -183,3 +183,86 @@ def test_router_match_with_fake_embeddings() -> None:
     router = SkillRouter(FakeEmb(), threshold=0.5, max_active=2)
     matched = router.match(1, [skill, other], "Расскажите про лекарства леводопу", revision=1)
     assert matched and matched[0].skill.name == "medications"
+
+
+def test_seed_upgrades_old_find_doctor_with_city_clarify(tmp_path: Path) -> None:
+    store = PlatformStore(tmp_path / "platform.db")
+    fund = store.register(slug="parkinson", name="Фонд", email="f2@parkinson.org", password="secret123")
+    doctor = next(skill for skill in store.list_skills(fund.id) if skill.name == "find-doctor")
+    assert doctor.config["clarify"]["slot"] == "city"
+
+    store.update_skill(
+        fund.id,
+        doctor.id,
+        {
+            "body": "Старые правила. Если списка нет в контексте — скажи об этом.",
+            "config": {"suggestions": ["Есть ли список врачей?"]},
+        },
+    )
+    store.seed_parkinson_skills(fund.id)
+    upgraded = store.get_skill(fund.id, doctor.id)
+    assert "Спроси, из какого он города" in upgraded.body
+    assert upgraded.config["clarify"]["source"] == "Список врачей.txt"
+    assert upgraded.config["suggestions"] == ["Есть ли список врачей?"]
+
+
+def test_router_margin_and_max_active() -> None:
+    from packages.skills.router import SkillRouter
+
+    class Scored:
+        def __init__(self) -> None:
+            self.vectors: dict[str, list[float]] = {}
+
+        def embed_documents(self, texts: list[str]) -> list[list[float]]:
+            return [self.vectors.setdefault(text, [1.0, 0.0]) for text in texts]
+
+        def embed_query(self, text: str) -> list[float]:
+            return [1.0, 0.0]
+
+    emb = Scored()
+    first = _skill(id=1, examples=(SkillExample(id=1, text="a"),))
+    second = _skill(id=2, name="exercises", title="Упражнения", priority=50, examples=(SkillExample(id=2, text="b"),))
+    third = _skill(id=3, name="fund-projects", title="Фонд", priority=40, examples=(SkillExample(id=3, text="c"),))
+    # All three clear the threshold; the margin should keep only the best.
+    emb.vectors.update({"a": [1.0, 0.0], "b": [0.8, 0.6], "c": [0.7, 0.7]})
+    router = SkillRouter(emb, threshold=0.5, max_active=2, margin=0.05)
+    matched = router.match(1, [first, second, third], "a", revision=1)
+    assert [item.skill.name for item in matched] == ["medications"]
+    assert len(matched) <= 2
+
+
+def test_router_rejects_the_e5_baseline() -> None:
+    from packages.skills.router import SkillRouter
+
+    class Baseline:
+        def embed_documents(self, texts: list[str]) -> list[list[float]]:
+            return [[0.82, 0.57] for _ in texts]
+
+        def embed_query(self, text: str) -> list[float]:
+            return [1.0, 0.0]
+
+    skill = _skill(examples=(SkillExample(id=1, text="a"),))
+    router = SkillRouter(Baseline(), threshold=0.86, max_active=2)
+    assert router.match(1, [skill], "привет", revision=1) == []
+
+
+def test_explicit_doctor_words_activate_find_doctor_below_threshold() -> None:
+    from packages.skills.router import SkillRouter
+
+    class BelowThreshold:
+        def embed_documents(self, texts: list[str]) -> list[list[float]]:
+            return [[1.0, 0.0] for _ in texts]
+
+        def embed_query(self, text: str) -> list[float]:
+            return [0.85, 0.5268]
+
+    doctor = _skill(
+        name="find-doctor",
+        title="Поиск врача",
+        config={},
+        examples=(SkillExample(id=1, text="Где найти невролога?"),),
+    )
+    router = SkillRouter(BelowThreshold(), threshold=0.86, max_active=2)
+    matched = router.match(1, [doctor], "Какие врачи есть в Москве?", revision=1)
+    assert [item.skill.name for item in matched] == ["find-doctor"]
+    assert router.match(1, [doctor], "Спасибо", revision=1) == []
