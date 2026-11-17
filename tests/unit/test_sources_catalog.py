@@ -75,3 +75,72 @@ def test_only_linked_files_are_downloadable(dirs) -> None:
 
 def test_path_traversal_is_rejected(dirs) -> None:
     assert _catalog(dirs).downloadable_path("../manifest.json") is None
+
+
+def test_tenant_catalog_uses_tenant_source_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from apps.api.app import deps
+    from packages.platform.context import tenant_var
+    from packages.platform.store import Tenant
+
+    knowledge = tmp_path / "tenants" / "parkinson" / "knowledge"
+    sources = tmp_path / "tenants" / "parkinson" / "knowledge_sources"
+    knowledge.mkdir(parents=True)
+    sources.mkdir(parents=True)
+    (sources / "Сон.pdf").write_bytes(b"%PDF-1.4 tenant")
+    (knowledge / "Сон.txt").write_text(
+        "# source-file: Сон.pdf\n# source-format: pdf\n\nтекст",
+        encoding="utf-8",
+    )
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text('{"documents": {}}', encoding="utf-8")
+
+    monkeypatch.setattr(deps.settings, "data_root", str(tmp_path))
+    monkeypatch.setenv("KNOWLEDGE_SOURCES_MANIFEST", str(manifest))
+    deps._tenant_source_catalogs.pop(99, None)
+    tenant = Tenant(
+        id=99,
+        slug="parkinson",
+        name="Фонд",
+        status="active",
+        collection_name="parkinson_kb",
+        prompt_path="",
+        created_at="",
+        email="f@example.org",
+    )
+    token = tenant_var.set(tenant)
+    try:
+        info = deps.get_active_source_catalog().describe("Сон.txt")
+        assert info["url"] == "/v1/knowledge/sources/%D0%A1%D0%BE%D0%BD.pdf"
+        assert info["format"] == "pdf"
+    finally:
+        tenant_var.reset(token)
+        deps._tenant_source_catalogs.pop(99, None)
+
+
+def test_direct_answer_source_has_download_url(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from apps.api.app.api.routes import chat
+    from packages.knowledge.base import RetrievedChunk
+
+    knowledge = tmp_path / "knowledge"
+    sources = tmp_path / "sources"
+    knowledge.mkdir()
+    sources.mkdir()
+    (sources / "Сон.pdf").write_bytes(b"%PDF-1.4 direct")
+    (knowledge / "Сон.txt").write_text(
+        "# source-file: Сон.pdf\n# source-format: pdf\n\nтекст",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("KNOWLEDGE_DIR", str(knowledge))
+    monkeypatch.setenv("KNOWLEDGE_SOURCES_DIR", str(sources))
+
+    prepared = chat.PreparedTurn(
+        session_id="test-session",
+        history=[],
+        search_query="",
+        new_topic="",
+        prompt_topic="",
+        prompt_meaning="",
+        extra_chunks=(RetrievedChunk(content="Врачи", source="Сон.txt"),),
+    )
+    result = chat._direct_sources(None, prepared)
+    assert result[0]["url"] == "/v1/knowledge/sources/%D0%A1%D0%BE%D0%BD.pdf"

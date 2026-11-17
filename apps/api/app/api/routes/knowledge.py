@@ -10,9 +10,14 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from apps.api.app.deps import get_vector_store
+from apps.api.app.deps import (
+    get_active_source_catalog,
+    get_knowledge_dir,
+    get_vector_store,
+)
 from packages.knowledge.base import VectorStore
-from packages.knowledge.sources import SourceCatalog, get_source_catalog
+from packages.knowledge.sources import SourceCatalog
+from packages.platform.context import tenant_var
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +55,7 @@ def _documents_on_disk(knowledge_dir: Path) -> list[str]:
 async def knowledge_status(
     store: VectorStore = Depends(get_vector_store),
 ) -> KnowledgeStatusResponse:
-    knowledge_dir = Path(os.getenv("KNOWLEDGE_DIR", "./data/knowledge"))
+    knowledge_dir = get_knowledge_dir()
 
     try:
         chunk_count = store.count()
@@ -68,7 +73,11 @@ async def knowledge_status(
 
     return KnowledgeStatusResponse(
         vector_store=os.getenv("VECTOR_STORE", "chroma"),
-        collection=os.getenv("CHROMA_COLLECTION", "parkinson_kb"),
+        collection=(
+            tenant_var.get().collection_name
+            if tenant_var.get() is not None
+            else os.getenv("CHROMA_COLLECTION", "parkinson_kb")
+        ),
         chunk_count=chunk_count,
         knowledge_dir=str(knowledge_dir),
         document_count=len(documents),
@@ -79,7 +88,7 @@ async def knowledge_status(
 @router.get("/sources/{file_name:path}", response_class=FileResponse)
 async def download_source(
     file_name: str,
-    catalog: SourceCatalog = Depends(get_source_catalog),
+    catalog: SourceCatalog = Depends(get_active_source_catalog),
 ) -> FileResponse:
     """Serve the original file (pdf, docx, xlsx…) behind an indexed document."""
     path = catalog.downloadable_path(file_name)

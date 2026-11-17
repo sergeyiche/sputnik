@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from apps.api.app.config import settings
 from apps.api.app.deps import (
+    get_active_source_catalog,
     get_dialogue_store,
     get_knowledge_dir,
     get_platform_store,
@@ -415,6 +416,7 @@ def _direct_sources(tenant, prepared: PreparedTurn) -> list[dict]:
         return []
     sources: list[dict] = []
     seen: set[str] = set()
+    catalog = get_active_source_catalog()
     for chunk in prepared.extra_chunks:
         if chunk.source in seen:
             continue
@@ -422,9 +424,7 @@ def _direct_sources(tenant, prepared: PreparedTurn) -> list[dict]:
         sources.append(
             {
                 "index": len(sources) + 1,
-                "source": chunk.source,
-                "title": chunk.source.rsplit(".", 1)[0],
-                "url": None,
+                **catalog.describe(chunk.source),
                 "score": None,
             }
         )

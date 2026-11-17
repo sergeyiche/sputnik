@@ -18,7 +18,7 @@ from packages.knowledge.base import VectorStore
 from packages.knowledge.chroma_store import ChromaVectorStore, replace_collection
 from packages.knowledge.embeddings_factory import create_embeddings
 from packages.knowledge.factory import create_vector_store
-from packages.knowledge.sources import get_source_catalog
+from packages.knowledge.sources import SourceCatalog, get_source_catalog
 from packages.rag.llm_factory import create_llm
 from packages.rag.pipeline import RAGPipeline
 from packages.integrations.mailtrap import MailtrapMailer
@@ -39,6 +39,7 @@ _tenant_stores: dict[str, VectorStore] = {}
 _tenant_pipelines: dict[int, RAGPipeline] = {}
 _tenant_prompts: dict[int, SystemPromptStore] = {}
 _tenant_runners: dict[int, IngestJobRunner] = {}
+_tenant_source_catalogs: dict[int, SourceCatalog] = {}
 _platform_store: PlatformStore | None = None
 _platform_store_path: str | None = None
 _mailer: MailtrapMailer | None = None
@@ -112,6 +113,7 @@ def get_rag_pipeline() -> RAGPipeline:
                 vector_store=get_vector_store(),
                 top_k=int(os.getenv("RAG_TOP_K", "5")),
                 prompt_text=prompt_store.active_text,
+                source_catalog=get_active_source_catalog(),
                 disclaimer=widget.disclaimer,
                 show_sources=widget.show_sources,
             )
@@ -199,6 +201,26 @@ def _chroma_dir() -> str:
 
 def _collection_name() -> str:
     return os.getenv("CHROMA_COLLECTION", "parkinson_kb")
+
+
+def get_active_source_catalog() -> SourceCatalog:
+    """Source catalog of the current organization (legacy paths outside a tenant)."""
+    tenant = tenant_var.get()
+    if tenant is None:
+        return get_source_catalog()
+    cached = _tenant_source_catalogs.get(tenant.id)
+    if cached is None:
+        layout = layout_for(_data_root(), tenant.slug)
+        layout.ensure()
+        cached = SourceCatalog(
+            knowledge_dir=layout.knowledge_dir,
+            sources_dir=layout.sources_dir,
+            manifest_path=Path(
+                os.getenv("KNOWLEDGE_SOURCES_MANIFEST", "./config/knowledge_sources.json")
+            ),
+        )
+        _tenant_source_catalogs[tenant.id] = cached
+    return cached
 
 
 def get_system_prompt_store() -> SystemPromptStore:
