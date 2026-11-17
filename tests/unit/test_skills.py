@@ -203,6 +203,7 @@ def test_seed_upgrades_old_find_doctor_with_city_clarify(tmp_path: Path) -> None
     upgraded = store.get_skill(fund.id, doctor.id)
     assert "Спроси, из какого он города" in upgraded.body
     assert upgraded.config["clarify"]["source"] == "Список врачей.txt"
+    assert upgraded.config["match_any"]
     assert upgraded.config["suggestions"] == ["Есть ли список врачей?"]
 
 

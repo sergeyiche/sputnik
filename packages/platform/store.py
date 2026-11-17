@@ -828,6 +828,10 @@ class PlatformStore:
             if want_clarify and not cfg.get("clarify"):
                 cfg["clarify"] = want_clarify
                 config_changed = True
+            want_match_any = want_config.get("match_any")
+            if want_match_any and not cfg.get("match_any"):
+                cfg["match_any"] = list(want_match_any)
+                config_changed = True
             if config_changed:
                 patch["config"] = cfg
             if patch:
