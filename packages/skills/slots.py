@@ -568,11 +568,13 @@ def plan_turn(
         # A directory is available: answer from exact rows, not semantic top-k.
         # This prevents doctors from other cities being labelled with the user's city.
         if rows:
+            skill_config = item.skill.config if isinstance(item.skill.config, dict) else {}
+            limit = int(skill_config.get("max_rows") or config.get("max_rows") or DEFAULT_CITY_ROWS)
             chunks = city_context_chunks(
                 rows,
                 city,
                 source=source,
-                limit=int(config.get("max_rows") or DEFAULT_CITY_ROWS),
+                limit=limit,
             )
             if not chunks:
                 return TurnAdjustment(
@@ -586,7 +588,7 @@ def plan_turn(
                 direct_answer=city_answer(
                     rows,
                     city,
-                    limit=int(config.get("max_rows") or DEFAULT_CITY_ROWS),
+                    limit=limit,
                 ),
             )
         return TurnAdjustment(city=city, skill=item.skill.name)

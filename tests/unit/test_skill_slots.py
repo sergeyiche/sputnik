@@ -300,3 +300,22 @@ def test_city_answer_deduplicates_same_doctor(tmp_path: Path) -> None:
     )
     assert adjustment.direct_answer
     assert adjustment.direct_answer.count("Иванов Иван Иванович") == 1
+
+
+def test_city_answer_respects_skill_max_rows(tmp_path: Path) -> None:
+    path = _doctor_file(tmp_path)
+    path.write_text(
+        path.read_text(encoding="utf-8")
+        + "Смирнов Петр Петрович\t+7 900 000-00-04\tКраснодар\tКлиника Д\tНевролог\n"
+        + "Сидоров Иван Петрович\t+7 900 000-00-05\tКраснодар\tКлиника Е\tНевролог\n",
+        encoding="utf-8",
+    )
+    matched = [MatchedSkill(skill=_find_doctor(config={"max_rows": 2}), score=0.9)]
+    adjustment = plan_turn(
+        matched,
+        question="Есть ли список врачей? Краснодар",
+        knowledge_dir=tmp_path,
+    )
+    assert adjustment.direct_answer
+    assert adjustment.direct_answer.count("- **") == 2
+    assert "показаны первые 2" in adjustment.direct_answer
