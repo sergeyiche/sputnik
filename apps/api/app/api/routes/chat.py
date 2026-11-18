@@ -143,6 +143,7 @@ async def chat(
             meaning=prepared.prompt_meaning,
             system_prompt=(skill.system_prompt if skill else None),
             boost_sources=(skill.boost_sources if skill else None),
+            boost_limit=(skill.boost_limit if skill else 1),
             extra_chunks=list(prepared.extra_chunks),
             skills=(skill.payload() if skill else []),
         )
@@ -223,6 +224,7 @@ def _query_with_auth_retry(
     meaning: str,
     system_prompt: str | None = None,
     boost_sources: list[str] | None = None,
+    boost_limit: int = 1,
     extra_chunks: list[RetrievedChunk] | None = None,
     skills: list[dict] | None = None,
 ) -> RAGResponse:
@@ -232,6 +234,7 @@ def _query_with_auth_retry(
         meaning=meaning,
         system_prompt=system_prompt,
         boost_sources=boost_sources,
+        boost_limit=boost_limit,
         extra_chunks=extra_chunks,
         skills=skills,
     )
@@ -402,6 +405,7 @@ def _attach_memory_facts(
             system_prompt=prompt,
             search_query=skill_turn.search_query,
             boost_sources=skill_turn.boost_sources,
+            boost_limit=skill_turn.boost_limit,
             suggestions=skill_turn.suggestions,
         ),
         fact_map,
@@ -589,6 +593,7 @@ async def _stream_answer(
             meaning=prepared.prompt_meaning,
             system_prompt=(skill.system_prompt if skill else None),
             boost_sources=(skill.boost_sources if skill else None),
+            boost_limit=(skill.boost_limit if skill else 1),
             extra_chunks=list(prepared.extra_chunks),
             skills=skills,
         ):

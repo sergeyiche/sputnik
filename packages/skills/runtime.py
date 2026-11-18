@@ -24,6 +24,7 @@ class SkillTurn:
     system_prompt: str | None
     search_query: str
     boost_sources: list[str]
+    boost_limit: int = 1
     suggestions: tuple[str, ...] = ()
 
     def payload(self) -> list[dict]:
@@ -41,6 +42,17 @@ class SkillTurn:
 
 def skills_enabled() -> bool:
     return os.getenv("SKILLS_ENABLED", "true").strip().lower() not in {"0", "false", "no"}
+
+
+def boost_limit_for(matched: list[MatchedSkill]) -> int:
+    limits: list[int] = []
+    for item in matched:
+        config = item.skill.config if isinstance(item.skill.config, dict) else {}
+        try:
+            limits.append(int(config.get("retrieval_boost_limit") or 1))
+        except (TypeError, ValueError):
+            limits.append(1)
+    return max([1, *limits])
 
 
 def select_context_skills(skills: list[Skill]) -> list[MatchedSkill]:
@@ -112,6 +124,7 @@ def apply_skills(
         system_prompt=None,
         search_query=search_query,
         boost_sources=[],
+        boost_limit=1,
         suggestions=[],
     )
     if not skills_enabled() or tenant_id is None:
@@ -149,5 +162,6 @@ def apply_skills(
         system_prompt=merge_skill_instructions(base_prompt, matched) if matched else None,
         search_query=enrich_search_query(search_query, matched_domain),
         boost_sources=boost_documents(matched_domain),
+        boost_limit=boost_limit_for(matched_domain),
         suggestions=tuple(followup_suggestions(matched_domain, asked=question)),
     )

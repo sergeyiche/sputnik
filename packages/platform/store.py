@@ -829,9 +829,28 @@ class PlatformStore:
                 cfg["clarify"] = want_clarify
                 config_changed = True
             want_match_any = want_config.get("match_any")
-            if want_match_any and not cfg.get("match_any"):
-                cfg["match_any"] = list(want_match_any)
+            for key in ("retrieval_boost_limit", "match_any", "avoid_any", "max_rows"):
+                if key in want_config and key not in cfg:
+                    cfg[key] = want_config[key]
+                    config_changed = True
+            # P0 migration for the seeded find-doctor skill: narrow the old
+            # broad match_any, add avoid_any and cap large city lists.
+            if raw["name"] == "find-doctor":
+                cfg["match_any"] = list(want_match_any or [])
+                cfg["avoid_any"] = list(want_config.get("avoid_any") or [])
+                cfg["max_rows"] = int(want_config.get("max_rows") or 10)
                 config_changed = True
+            # P0 migration for fund-projects: no proactive donation chip and
+            # no donation-heavy "О фонде" boost.
+            if raw["name"] == "fund-projects":
+                old_donation = "Как поддержать фонд пожертвованием?"
+                if old_donation in (cfg.get("suggestions") or []):
+                    cfg["suggestions"] = list(want_suggestions or [])
+                    config_changed = True
+                if "Не выводи «проект недоступен»" not in (current.body or ""):
+                    patch["body"] = raw["body"]
+                if current.retrieval_boost != list(raw.get("retrieval_boost") or []):
+                    patch["retrieval_boost"] = list(raw.get("retrieval_boost") or [])
             if config_changed:
                 patch["config"] = cfg
             if patch:

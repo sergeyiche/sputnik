@@ -65,3 +65,27 @@ def test_suspicious_query_does_not_call_llm(isolated_prompt: None) -> None:
     assert llm.calls == 0
     assert result.chunks_used == 0
     assert result.sources == []
+
+
+def test_boost_can_add_several_chunks_from_one_source() -> None:
+    from packages.knowledge.base import RetrievedChunk
+    from packages.rag.pipeline import RAGPipeline
+
+    class _Store:
+        def similarity_search(self, query: str, k: int = 5) -> list:
+            return []
+
+        def chunks_for_sources(self, sources: list[str], *, limit_per: int = 1) -> list:
+            return [
+                RetrievedChunk(content=f"section {index}", source="project.txt", score=None)
+                for index in range(limit_per)
+            ]
+
+    pipeline = RAGPipeline(llm=object(), vector_store=_Store(), prompt_text=lambda: "sys")
+    chunks = pipeline._retrieve("как вступить", boost_sources=["project.txt"], boost_limit=4)
+    assert [chunk.content for chunk in chunks] == [
+        "section 0",
+        "section 1",
+        "section 2",
+        "section 3",
+    ]

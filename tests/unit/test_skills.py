@@ -204,6 +204,8 @@ def test_seed_upgrades_old_find_doctor_with_city_clarify(tmp_path: Path) -> None
     assert "Спроси, из какого он города" in upgraded.body
     assert upgraded.config["clarify"]["source"] == "Список врачей.txt"
     assert upgraded.config["match_any"]
+    assert upgraded.config["avoid_any"]
+    assert upgraded.config["max_rows"] == 10
     assert upgraded.config["suggestions"] == ["Есть ли список врачей?"]
 
 
@@ -267,3 +269,65 @@ def test_explicit_doctor_words_activate_find_doctor_below_threshold() -> None:
     matched = router.match(1, [doctor], "Какие врачи есть в Москве?", revision=1)
     assert [item.skill.name for item in matched] == ["find-doctor"]
     assert router.match(1, [doctor], "Спасибо", revision=1) == []
+
+
+def test_router_avoid_any_blocks_doctor_on_legal_question() -> None:
+    from packages.skills.router import SkillRouter
+
+    class FakeEmb:
+        def embed_documents(self, texts: list[str]) -> list[list[float]]:
+            return [[1.0, 0.0] for _ in texts]
+
+        def embed_query(self, text: str) -> list[float]:
+            return [1.0, 0.0]
+
+    doctor = _skill(
+        name="find-doctor",
+        title="Поиск врача",
+        config={"avoid_any": ["льгот", "юрид", "инвалид"]},
+        examples=(SkillExample(id=1, text="Где найти врача?"),),
+    )
+    router = SkillRouter(FakeEmb(), threshold=0.5, max_active=2)
+    assert router.match(1, [doctor], "К какому специалисту обратиться по льготам?", revision=1) == []
+    assert router.match(1, [doctor], "Где найти врача?", revision=1)[0].skill.name == "find-doctor"
+
+
+def test_fund_projects_seed_has_no_donation_chip_and_no_donate_doc(tmp_path: Path) -> None:
+    store = PlatformStore(tmp_path / "platform.db")
+    fund = store.register(slug="parkinson", name="Фонд", email="f3@parkinson.org", password="secret123")
+    projects = next(skill for skill in store.list_skills(fund.id) if skill.name == "fund-projects")
+    assert "Как поддержать фонд пожертвованием?" not in projects.config["suggestions"]
+    assert "О фонде.txt" not in projects.retrieval_boost
+    assert "Не выводи «проект недоступен»" in projects.body
+
+
+def test_legal_social_seed_exists(tmp_path: Path) -> None:
+    store = PlatformStore(tmp_path / "platform.db")
+    fund = store.register(slug="parkinson", name="Фонд", email="f4@parkinson.org", password="secret123")
+    legal = next(skill for skill in store.list_skills(fund.id) if skill.name == "legal-social")
+    assert legal.skill_type == "domain" and legal.enabled
+    assert "правовая поддержка БП 2026.txt" in legal.retrieval_boost
+    find_doctor = next(skill for skill in store.list_skills(fund.id) if skill.name == "find-doctor")
+    assert find_doctor.config["max_rows"] == 10
+    assert "специалист" not in find_doctor.config["match_any"]
+    assert "льгот" in find_doctor.config["avoid_any"]
+
+
+def test_seed_removes_old_fund_donation_chip_and_boost(tmp_path: Path) -> None:
+    store = PlatformStore(tmp_path / "platform.db")
+    fund = store.register(slug="parkinson", name="Фонд", email="f5@parkinson.org", password="secret123")
+    projects = next(skill for skill in store.list_skills(fund.id) if skill.name == "fund-projects")
+    store.update_skill(
+        fund.id,
+        projects.id,
+        {
+            "body": "Старые правила. Донаты — только если человек сам спросил.",
+            "retrieval_boost": ["Навигатор по проектам фонда.txt", "О фонде.txt"],
+            "config": {"suggestions": ["Как поддержать фонд пожертвованием?"]},
+        },
+    )
+    store.seed_parkinson_skills(fund.id)
+    upgraded = store.get_skill(fund.id, projects.id)
+    assert "О фонде.txt" not in upgraded.retrieval_boost
+    assert "Как поддержать фонд пожертвованием?" not in upgraded.config["suggestions"]
+    assert "Не выводи «проект недоступен»" in upgraded.body

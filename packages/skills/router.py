@@ -22,12 +22,19 @@ FIND_DOCTOR_MATCH_ANY = (
     "невролог",
     "паркинсонолог",
     "клиник",
-    "контакт",
-    "специалист",
     "список врачей",
-    "к кому",
-    "обратиться",
-    "где найти",
+    "контакты врача",
+    "к кому из врачей",
+    "где найти врача",
+)
+FIND_DOCTOR_AVOID_ANY = (
+    "льгот",
+    "юрид",
+    "инвалид",
+    "мсэ",
+    "пособ",
+    "выплат",
+    "правов",
 )
 
 
@@ -167,6 +174,8 @@ class SkillRouter:
         lowered = question.casefold()
         scored: list[MatchedSkill] = []
         for skill in domain:
+            if _avoid_any(skill, lowered):
+                continue
             example_vecs = cached.get(skill.id) or []
             if not example_vecs:
                 continue
@@ -179,6 +188,8 @@ class SkillRouter:
         matched_ids = {item.skill.id for item in scored}
         for skill in domain:
             if skill.id in matched_ids:
+                continue
+            if _avoid_any(skill, lowered):
                 continue
             hints = _match_any(skill)
             if hints and any(hint.casefold() in lowered for hint in hints):
@@ -216,6 +227,17 @@ def _match_any(skill: Skill) -> tuple[str, ...]:
     if skill.skill_type == "domain" and skill.name == "find-doctor":
         return FIND_DOCTOR_MATCH_ANY
     return ()
+
+
+def _avoid_any(skill: Skill, question: str) -> bool:
+    if isinstance(skill.config, dict) and "avoid_any" in skill.config:
+        raw = skill.config.get("avoid_any")
+        terms = tuple(str(item).strip() for item in raw or [] if str(item).strip())
+    elif skill.skill_type == "domain" and skill.name == "find-doctor":
+        terms = FIND_DOCTOR_AVOID_ANY
+    else:
+        terms = ()
+    return any(term.casefold() in question for term in terms)
 
 
 def enrich_search_query(base: str, matched: list[MatchedSkill]) -> str:

@@ -10,6 +10,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
 from packages.knowledge.base import RetrievedChunk, VectorStore
+from packages.knowledge.policy import sanitize_context_text
 from packages.knowledge.sources import SourceCatalog
 from packages.rag.citations import normalize_citations, strip_citations
 from packages.rag.prompts import (
@@ -99,7 +100,14 @@ class RAGPipeline:
         parts: list[str] = []
         for document, number in numbers.items():
             title = self._describe_source(document)["title"]
-            body = "\n…\n".join(by_document[document])
+            fragments = [
+                sanitize_context_text(chunk.strip())
+                for chunk in by_document[document]
+            ]
+            fragments = [fragment for fragment in fragments if fragment]
+            if not fragments:
+                continue
+            body = "\n…\n".join(fragments)
             parts.append(f"[{number}] Документ: «{title}»\n{body}")
         return "\n\n".join(parts)
 
@@ -129,6 +137,7 @@ class RAGPipeline:
         query: str,
         *,
         boost_sources: list[str] | None = None,
+        boost_limit: int = 1,
         extra_chunks: list[RetrievedChunk] | None = None,
     ) -> list[RetrievedChunk]:
         fetch_k = max(self._top_k, int(os.getenv("RAG_FETCH_K", str(self._top_k * 2))))
@@ -164,17 +173,20 @@ class RAGPipeline:
                     break
 
         if boost_sources:
-            present = {chunk.source for chunk in selected}
-            missing = [name for name in boost_sources if name not in present]
-            if missing:
-                boosted = self._vector_store.chunks_for_sources(missing, limit_per=1)
-                # Prepend boosted docs so they get citation numbers when used
-                for chunk in reversed(boosted):
-                    if chunk.source in present:
-                        continue
-                    selected.insert(0, chunk)
-                    present.add(chunk.source)
-                selected = selected[: max(self._top_k, len(present))]
+            boosted = self._vector_store.chunks_for_sources(
+                boost_sources,
+                limit_per=max(1, boost_limit),
+            )
+            # Prepend boosted chunks so they get citation numbers when used.
+            # Do not deduplicate by source: a source can contribute several
+            # sections (e.g. "как вступить" lives in a later chunk of a long
+            # project guide).
+            present_content = {chunk.content for chunk in selected}
+            for chunk in reversed(boosted):
+                if chunk.content in present_content:
+                    continue
+                selected.insert(0, chunk)
+                present_content.add(chunk.content)
 
         if extra_chunks:
             exact_sources = {chunk.source for chunk in extra_chunks}
@@ -245,6 +257,7 @@ class RAGPipeline:
         meaning: str = "",
         system_prompt: str | None = None,
         boost_sources: list[str] | None = None,
+        boost_limit: int = 1,
         extra_chunks: list[RetrievedChunk] | None = None,
         skills: list[dict] | None = None,
     ) -> RAGResponse:
@@ -259,6 +272,7 @@ class RAGPipeline:
         chunks = self._retrieve(
             (search_query or question).strip(),
             boost_sources=boost_sources,
+            boost_limit=boost_limit,
             extra_chunks=extra_chunks,
         )
 
@@ -296,6 +310,7 @@ class RAGPipeline:
         meaning: str = "",
         system_prompt: str | None = None,
         boost_sources: list[str] | None = None,
+        boost_limit: int = 1,
         extra_chunks: list[RetrievedChunk] | None = None,
         skills: list[dict] | None = None,
     ):
@@ -310,6 +325,7 @@ class RAGPipeline:
         chunks = self._retrieve(
             (search_query or question).strip(),
             boost_sources=boost_sources,
+            boost_limit=boost_limit,
             extra_chunks=extra_chunks,
         )
 
