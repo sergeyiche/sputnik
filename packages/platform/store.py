@@ -829,7 +829,7 @@ class PlatformStore:
                 cfg["clarify"] = want_clarify
                 config_changed = True
             want_match_any = want_config.get("match_any")
-            for key in ("retrieval_boost_limit", "match_any", "avoid_any", "max_rows"):
+            for key in ("retrieval_boost_limit", "match_any", "avoid_any", "max_rows", "lookup"):
                 if key in want_config and key not in cfg:
                     cfg[key] = want_config[key]
                     config_changed = True
@@ -843,6 +843,8 @@ class PlatformStore:
             # P0 migration for fund-projects: no proactive donation chip and
             # no donation-heavy "О фонде" boost.
             if raw["name"] == "fund-projects":
+                cfg["match_any"] = list(want_config.get("match_any") or [])
+                config_changed = True
                 old_donation = "Как поддержать фонд пожертвованием?"
                 if old_donation in (cfg.get("suggestions") or []):
                     cfg["suggestions"] = list(want_suggestions or [])

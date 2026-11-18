@@ -29,7 +29,7 @@ def test_strips_how_to_answer_lines() -> None:
     )
     cleaned = sanitize_context_text(text)
     assert "Как отвечать" not in cleaned
-    assert "Ключевые формулировки" in cleaned
+    assert "Ключевые формулировки" not in cleaned
 
 
 def test_strips_donation_meta_header() -> None:

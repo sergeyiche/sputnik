@@ -344,7 +344,7 @@ def _prepare_turn(
         prompt_meaning=search_query if continuation else "",
         skill_turn=skill_turn,
         direct_answer=adjustment.direct_answer,
-        extra_chunks=adjustment.city_chunks,
+        extra_chunks=adjustment.exact_chunks,
     )
 
 

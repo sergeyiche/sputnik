@@ -19,6 +19,7 @@ from difflib import SequenceMatcher
 from pathlib import Path
 
 from packages.knowledge.base import RetrievedChunk
+from packages.knowledge.policy import sanitize_context_text
 from packages.skills.models import MatchedSkill, Skill
 
 DEFAULT_CITY_QUESTION = (
@@ -96,11 +97,20 @@ _CITY_PREPOSITION = re.compile(
 
 _rows_lock = threading.Lock()
 _rows_cache: dict[tuple[str, int], tuple["DirectoryRow", ...]] = {}
+_sections_cache: dict[tuple[str, int], tuple["DocumentSection", ...]] = {}
+_SECTION_HEADING = re.compile(r"^\s*((?:\d+\.)+\d+)\.\s+(.+?)\s*$")
+_SECTION_PAYMENT_MARKERS = ("оплата — перевод", "tbank.ru", "промокод")
 
 
 @dataclass(frozen=True)
 class DirectoryRow:
     city: str
+    text: str
+
+
+@dataclass(frozen=True)
+class DocumentSection:
+    title: str
     text: str
 
 
@@ -111,7 +121,7 @@ class TurnAdjustment:
     clarification: str | None = None
     city: str | None = None
     skill: str = ""
-    city_chunks: tuple[RetrievedChunk, ...] = ()
+    exact_chunks: tuple[RetrievedChunk, ...] = ()
     direct_answer: str | None = None
 
 
@@ -143,6 +153,13 @@ def _looks_like_city_answer(text: str) -> bool:
     return all(
         re.fullmatch(r"[А-ЯЁA-Z][А-ЯЁа-яёa-z\-]+", word) is not None for word in words
     )
+
+
+def _term_present(term: str, text: str) -> bool:
+    """Loose word match for Russian inflections («команда»/«команду»)."""
+    normalized = text.casefold().replace("ё", "е")
+    words = [word for word in term.casefold().replace("ё", "е").split() if word]
+    return bool(words) and all(city_stem(word) in normalized for word in words)
 
 
 def _city_from_preposition(text: str) -> str | None:
@@ -291,7 +308,115 @@ def load_cities(path: Path | None) -> list[str]:
     return sorted(cities.values(), key=len, reverse=True)
 
 
-def city_chunks(
+def _parse_sections(text: str) -> tuple[DocumentSection, ...]:
+    sections: list[DocumentSection] = []
+    current: DocumentSection | None = None
+    for line in text.splitlines():
+        match = _SECTION_HEADING.match(line)
+        if match:
+            if current is not None:
+                sections.append(current)
+            current = DocumentSection(title=f"{match.group(1)}. {match.group(2)}", text="")
+            continue
+        if current is not None:
+            current = DocumentSection(title=current.title, text=f"{current.text}\n{line}".strip())
+    if current is not None:
+        sections.append(current)
+    return tuple(sections)
+
+
+def load_sections(path: Path | None) -> list[DocumentSection]:
+    """Split a numbered knowledge document into its ``1.1``-style sections."""
+    if path is None:
+        return []
+    try:
+        stat = path.stat()
+    except OSError:
+        return []
+    key = (str(path), stat.st_mtime_ns)
+    with _rows_lock:
+        cached = _sections_cache.get(key)
+    if cached is not None:
+        return list(cached)
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return []
+    sections = _parse_sections(text)
+    with _rows_lock:
+        _sections_cache[key] = sections
+        if len(_sections_cache) > 32:
+            _sections_cache.pop(next(iter(_sections_cache)))
+    return list(sections)
+
+
+def _clean_section(text: str) -> str:
+    cleaned = sanitize_context_text(text)
+    lines = [
+        line
+        for line in cleaned.splitlines()
+        if not any(marker in line.casefold() for marker in _SECTION_PAYMENT_MARKERS)
+    ]
+    return "\n".join(lines).strip()
+
+
+def project_lookup(
+    skill: Skill,
+    question: str,
+    knowledge_dir: Path | None,
+) -> TurnAdjustment | None:
+    """Return a deterministic answer for a named fund project."""
+    config = skill.config if isinstance(skill.config, dict) else {}
+    lookup = config.get("lookup")
+    if not isinstance(lookup, dict):
+        return None
+    source = str(lookup.get("source") or "").strip()
+    items = lookup.get("items")
+    if not source or not isinstance(items, list):
+        return None
+    path = _source_path(knowledge_dir, source)
+    sections = load_sections(path)
+    if not sections:
+        return None
+    lowered = question.casefold()
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        terms = [str(term) for term in item.get("terms") or [] if str(term).strip()]
+        heading = str(item.get("heading") or "").strip().casefold()
+        if not terms or not heading:
+            continue
+        if not any(_term_present(term, lowered) for term in terms):
+            continue
+        for section in sections:
+            if heading not in section.title.casefold():
+                continue
+            body = _clean_section(section.text)
+            if not body:
+                continue
+            if len(body) > 1800:
+                body = body[:1800].rsplit("\n", 1)[0].rstrip() + "…"
+            title = section.title.split(". ", 1)[-1]
+            answer = (
+                f"О проекте «{title}»:\n\n{body}\n\n"
+                "Информация может обновляться — уточняйте на официальном сайте фонда."
+            )
+            return TurnAdjustment(
+                direct_answer=answer,
+                exact_chunks=(
+                    RetrievedChunk(
+                        content=f"Проект «{title}»:\n{body}",
+                        source=Path(source).name,
+                        score=None,
+                        metadata={"lookup": "project", "project": title},
+                    ),
+                ),
+                skill=skill.name,
+            )
+    return None
+
+
+def city_context_chunks(
     rows: list[DirectoryRow],
     city: str,
     *,
@@ -402,6 +527,9 @@ def plan_turn(
     """Ask for a missing slot, or provide exact city-filtered context."""
     memory = memory or {}
     for item in matched:
+        lookup = project_lookup(item.skill, question, knowledge_dir)
+        if lookup is not None:
+            return lookup
         config = clarification_config(item.skill)
         if config is None:
             continue
@@ -435,7 +563,7 @@ def plan_turn(
         # A directory is available: answer from exact rows, not semantic top-k.
         # This prevents doctors from other cities being labelled with the user's city.
         if rows:
-            chunks = city_chunks(
+            chunks = city_context_chunks(
                 rows,
                 city,
                 source=source,
@@ -449,7 +577,7 @@ def plan_turn(
             return TurnAdjustment(
                 city=city,
                 skill=item.skill.name,
-                city_chunks=tuple(chunks),
+                exact_chunks=tuple(chunks),
                 direct_answer=city_answer(
                     rows,
                     city,

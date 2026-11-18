@@ -216,3 +216,70 @@ def test_thanks_does_not_become_a_city_name(tmp_path: Path) -> None:
         knowledge_dir=tmp_path,
     )
     assert adjustment.clarification == DEFAULT_CITY_QUESTION
+
+
+def _navigator_file(tmp_path: Path) -> Path:
+    path = tmp_path / "Навигатор по проектам фонда.txt"
+    path.write_text(
+        "1.1. Игры Паркинсона\n"
+        "Соревнования и тренировки.\n\n"
+        "1.2. Команда Мечты\n"
+        "Статус: готовится отдельный проект на сайте.\n"
+        "Как вступить:\n"
+        "Связаться с капитаном — Иван Иванов, +7 900 111-22-33\n"
+        "Заполнить анкету: https://forms.example/team\n"
+        "Взнос: 400 ₽.\n"
+        "Оплата — перевод: https://tbank.example/pay\n"
+        "Как отвечать: набор завершён.\n\n"
+        "1.7. Творческий онлайн-клуб «ДО-ФА-МИ»\n"
+        "Творческий клуб: музыка, каллиграфия, встречи.\n"
+        "Как вступить: написать в ВК.\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_project_lookup_uses_how_to_join_section(tmp_path: Path) -> None:
+    _navigator_file(tmp_path)
+    skill = _find_doctor(
+        config={
+            "lookup": {
+                "source": "Навигатор по проектам фонда.txt",
+                "items": [{"terms": ["команда мечты"], "heading": "Команда Мечты"}],
+            }
+        }
+    )
+    skill = replace(skill, name="fund-projects")
+    adjustment = plan_turn(
+        [MatchedSkill(skill=skill, score=0.9)],
+        question="Как попасть в Команду Мечты?",
+        knowledge_dir=tmp_path,
+    )
+    assert adjustment.direct_answer
+    assert "Иван Иванов" in adjustment.direct_answer
+    assert "forms.example/team" in adjustment.direct_answer
+    assert "недоступ" not in adjustment.direct_answer.casefold()
+    assert "Как отвечать" not in adjustment.direct_answer
+    assert "tbank.example" not in adjustment.direct_answer
+    assert adjustment.exact_chunks[0].source == "Навигатор по проектам фонда.txt"
+
+
+def test_project_lookup_does_not_mix_club_with_other_projects(tmp_path: Path) -> None:
+    _navigator_file(tmp_path)
+    skill = _find_doctor(
+        config={
+            "lookup": {
+                "source": "Навигатор по проектам фонда.txt",
+                "items": [{"terms": ["до-фа-ми"], "heading": "ДО-ФА-МИ"}],
+            }
+        }
+    )
+    skill = replace(skill, name="fund-projects")
+    adjustment = plan_turn(
+        [MatchedSkill(skill=skill, score=0.9)],
+        question="Что такое клуб «До-Фа-Ми»?",
+        knowledge_dir=tmp_path,
+    )
+    assert adjustment.direct_answer
+    assert "Творческий клуб" in adjustment.direct_answer
+    assert "Иван Иванов" not in adjustment.direct_answer
