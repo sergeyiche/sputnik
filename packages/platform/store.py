@@ -842,6 +842,9 @@ class PlatformStore:
                 config_changed = True
             # P0 migration for fund-projects: no proactive donation chip and
             # no donation-heavy "О фонде" boost.
+            if raw["name"] == "legal-social":
+                if "Не используй устаревшие названия ведомств" not in (current.body or ""):
+                    patch["body"] = raw["body"]
             if raw["name"] == "fund-projects":
                 cfg["match_any"] = list(want_config.get("match_any") or [])
                 config_changed = True

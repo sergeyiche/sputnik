@@ -394,8 +394,8 @@ def project_lookup(
             body = _clean_section(section.text)
             if not body:
                 continue
-            if len(body) > 1800:
-                body = body[:1800].rsplit("\n", 1)[0].rstrip() + "…"
+            if len(body) > 1200:
+                body = body[:1200].rsplit("\n", 1)[0].rstrip() + "…"
             title = section.title.split(". ", 1)[-1]
             answer = (
                 f"О проекте «{title}»:\n\n{body}\n\n"
@@ -464,6 +464,7 @@ def city_answer(
     limit = max(1, min(int(limit), 60))
     shown = matches[:limit]
     lines = [f"В городе {city} в списке фонда есть такие специалисты:", ""]
+    seen_names: set[str] = set()
     for row in shown:
         parts = [part.strip() for part in row.text.split(" | ")]
         name = parts[0] if parts else ""
@@ -472,6 +473,10 @@ def city_answer(
         specialty = parts[4] if len(parts) > 4 else ""
         if not name:
             continue
+        name_key = " ".join(name.casefold().replace("ё", "е").split())
+        if name_key in seen_names:
+            continue
+        seen_names.add(name_key)
         line = f"- **{name}**"
         if specialty:
             line += f" — {specialty}"

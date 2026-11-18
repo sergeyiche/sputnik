@@ -283,3 +283,20 @@ def test_project_lookup_does_not_mix_club_with_other_projects(tmp_path: Path) ->
     assert adjustment.direct_answer
     assert "Творческий клуб" in adjustment.direct_answer
     assert "Иван Иванов" not in adjustment.direct_answer
+
+
+def test_city_answer_deduplicates_same_doctor(tmp_path: Path) -> None:
+    path = _doctor_file(tmp_path)
+    path.write_text(
+        path.read_text(encoding="utf-8")
+        + "Иванов Иван Иванович\t+7 900 000-00-00\tКраснодар\tКлиника А\tНевролог\n",
+        encoding="utf-8",
+    )
+    matched = [MatchedSkill(skill=_find_doctor(), score=0.9)]
+    adjustment = plan_turn(
+        matched,
+        question="Есть ли список врачей? Краснодар",
+        knowledge_dir=tmp_path,
+    )
+    assert adjustment.direct_answer
+    assert adjustment.direct_answer.count("Иванов Иван Иванович") == 1
