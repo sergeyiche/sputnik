@@ -12,12 +12,14 @@ SCRIPT=/opt/oracool/scripts/deploy.sh
 LOG=/var/log/sputnik-deploy.log
 
 should_deploy=0
+pushed_sha=""
 while read -r old new ref; do
   [ "$ref" = "refs/heads/main" ] || continue
   if [ "$new" = "0000000000000000000000000000000000000000" ]; then
     continue
   fi
   should_deploy=1
+  pushed_sha="$new"
 done
 
 [ "$should_deploy" -eq 1 ] || exit 0
@@ -30,4 +32,4 @@ fi
 
 nohup "$SCRIPT" >>"$LOG" 2>&1 </dev/null &
 printf '%s deploy started: %s (pid %s)\n' \
-  "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$new" "$!" >>"$LOG"
+  "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$pushed_sha" "$!" >>"$LOG"

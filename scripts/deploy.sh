@@ -21,6 +21,11 @@ log() {
 
 cd "$APP_DIR"
 
+# A post-receive hook runs with GIT_DIR/GIT_WORK_TREE pointing at the bare
+# repository; drop them or every git command below would use the wrong repo.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
+  GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE GIT_PREFIX
+
 # Only one deploy at a time; a queued push is picked up by the next run.
 exec 9>/var/lock/sputnik-deploy.lock
 if ! flock -n 9; then
