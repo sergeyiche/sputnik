@@ -12,13 +12,29 @@ from packages.integrations.mailtrap import MailtrapError
 class RecordingMailer:
     def __init__(self, configured: bool = True) -> None:
         self.configured = configured
-        self.messages: list[dict[str, str]] = []
+        self.messages: list[dict] = []
         self.fail = False
 
-    def send(self, *, to_email: str, subject: str, text: str) -> None:
+    def send(
+        self,
+        *,
+        to_email: str,
+        subject: str,
+        text: str,
+        attachments=None,
+        reply_to: str | None = None,
+    ) -> None:
         if self.fail:
             raise MailtrapError("не доставлено")
-        self.messages.append({"to": to_email, "subject": subject, "text": text})
+        self.messages.append(
+            {
+                "to": to_email,
+                "subject": subject,
+                "text": text,
+                "attachments": list(attachments or []),
+                "reply_to": reply_to,
+            }
+        )
 
 
 def application_token(text: str) -> str:

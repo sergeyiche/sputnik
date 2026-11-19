@@ -139,22 +139,27 @@ def apply_skills(
 
     context = select_context_skills(skills)
 
-    if router is None:
-        if router_factory is None:
-            raise RuntimeError("router or router_factory is required when skills exist")
-        router = router_factory()
+    # Workflow/context-only tenants must not load embeddings just to discover
+    # that there are no domain skills to route.
+    domain_skills = [item for item in skills if item.skill_type == "domain" and item.enabled]
+    matched_domain: list[MatchedSkill] = []
+    if domain_skills:
+        if router is None:
+            if router_factory is None:
+                raise RuntimeError("router or router_factory is required when skills exist")
+            router = router_factory()
 
-    revision = store.skills_revision(tenant_id)
-    # Domain route scores the resolved standalone question, not the raw short follow-up.
-    route_text = (search_query or question).strip() or question.strip()
-    matched_domain = router.match(
-        tenant_id,
-        skills,
-        route_text,
-        sticky_names=sticky.remaining(session_id),
-        revision=revision,
-    )
-    sticky.commit(session_id, matched_domain)
+        revision = store.skills_revision(tenant_id)
+        # Domain route scores the resolved standalone question, not the raw short follow-up.
+        route_text = (search_query or question).strip() or question.strip()
+        matched_domain = router.match(
+            tenant_id,
+            skills,
+            route_text,
+            sticky_names=sticky.remaining(session_id),
+            revision=revision,
+        )
+        sticky.commit(session_id, matched_domain)
 
     matched = [*context, *matched_domain]
     return SkillTurn(

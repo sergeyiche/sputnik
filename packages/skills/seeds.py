@@ -345,7 +345,75 @@ PARKINSON_CONTEXT_SKILLS: list[dict[str, Any]] = [
     },
 ]
 
+# Workflow skills: explicit intent + state machine + server-side tools.
+PARKINSON_WORKFLOW_SKILLS: list[dict[str, Any]] = [
+    {
+        "name": "contact-request",
+        "title": "Передать обращение",
+        "skill_type": "workflow",
+        "activation": "intent",
+        "description": (
+            "Передаёт обращение пользователя сотруднику фонда: контакты, краткое резюме "
+            "и полный диалог письмом на почту организации. Включать, когда просят связаться, "
+            "перезвонить, оставить заявку, спрашивают «как связаться» или предлагают сотрудничество."
+        ),
+        "body": """## Что собираем
+- Контакт: телефон, email, MAX или Telegram.
+- Имя, организация, суть обращения.
+
+## Чего не делаем
+- Не обещаем запись или ответ в конкретное время.
+- Не отправляем письмо без контакта.
+- На вопрос «как связаться» сначала даём контакты фонда из базы знаний, затем предлагаем
+  оставить свой контакт.""",
+        "priority": 90,
+        "sticky_turns": 0,
+        "enabled": True,
+        "retrieval_boost": [],
+        "query_hints": [],
+        "allowed_tools": ["send_contact_request"],
+        "examples": [
+            "Перезвоните мне, пожалуйста",
+            "Хочу, чтобы со мной связались",
+            "Хочу, чтобы со мной связались по поводу консультации",
+            "Как с вами связаться?",
+            "Куда написать?",
+            "У нас предложение о сотрудничестве",
+            "Мы организация, хотим предложить фонду проект",
+            "Оставьте мои контакты координатору",
+            "Мой Telegram @anna_parkinson",
+            "Пишите мне в MAX",
+        ],
+        "config": {
+            "steps": ["await_contact", "collect_contacts", "confirm", "send"],
+            "required_slots": ["contact_channel"],
+            "contact_channels": ["phone", "email", "max", "telegram"],
+            "recipient": "account_email",
+            "require_explicit_intent": True,
+            "require_confirm": False,
+            "allow_confirm_skip_for_explicit_request": True,
+            "offer_contact_after_contact_question": True,
+            "await_contact_ttl_minutes": 30,
+            "summary": {"enabled": True, "max_input_chars": 12000, "max_output_chars": 1500},
+            "attachment": {"enabled": True, "max_bytes": 524288, "filename_prefix": "dialog"},
+            "rate_limit": {"per_session_minutes": 10, "per_tenant_per_day": 50},
+            "subject_prefix": "[Спутник]",
+            "fallback_contact": "info@fondparkinson.ru",
+            "confirmation_text": "Наш специалист свяжется с вами в ближайшее время.",
+            "offer_text": (
+                "Если удобнее, оставьте свой телефон, email, MAX или Telegram — "
+                "передам специалисту."
+            ),
+            "ask_contact_text": "Как с вами связаться? Телефон, email, MAX или Telegram.",
+            "ambiguous_handle_question": "Это Telegram или MAX? Уточните, пожалуйста.",
+            "cancel_phrases": ["нет", "отмена", "не надо", "не отправляйте", "стоп", "передумал"],
+            "confirm_phrases": ["да", "верно", "подтверждаю", "отправляйте", "передавайте"],
+        },
+    },
+]
+
 PARKINSON_SKILL_SEEDS: list[dict[str, Any]] = [
     *PARKINSON_DOMAIN_SKILLS,
     *PARKINSON_CONTEXT_SKILLS,
+    *PARKINSON_WORKFLOW_SKILLS,
 ]

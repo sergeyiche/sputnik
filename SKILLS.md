@@ -9,6 +9,29 @@
 
 ---
 
+## 0. Статус реализации (19.11.2026)
+
+Документ остаётся целевым дизайном. Ниже — что уже работает в коде, а что пока только план.
+
+| Блок | Статус | Где |
+|---|---|---|
+| `skills`, `skill_examples`: хранение, CRUD, seed | ✅ | `packages/platform/store.py`, `packages/skills/seeds.py` |
+| Domain-роутер: эмбеддинги, порог, `match_any`/`avoid_any`, sticky, `priority` | ✅ | `packages/skills/router.py` |
+| Context-навыки `attention`, `dialogue-memory` (`activation=always`) | ✅ | `packages/skills/runtime.py`, `packages/dialogue/` |
+| Склейка промпта, query hints, retrieval boost, подсказки | ✅ | `packages/skills/router.py` |
+| Слоты: город для `find-doctor`, lookup проектов | ✅ | `packages/skills/slots.py` |
+| Админка: CRUD, seed, preview (domain), вкладка «Навыки» | ✅ | `apps/api/app/api/routes/admin.py`, `apps/admin/` |
+| `workflow`: runtime, `skill_runs`, intent, tools, confirm | ✅ для `contact-request` | `packages/skills/workflow.py`, `contact_request.py`, `tools.py` |
+| `allowed_tools`: хранение в БД / API / UI | ✅ | `skills.allowed_tools` |
+| `allowed_tools`: проверка при вызове tool | ✅ | `packages/skills/tools.py` |
+| Импорт/экспорт `SKILL.md`, каталог `config/skills`, `SKILLS_SEED_DIR` | ❌ план | сиды в `packages/skills/seeds.py` |
+| Context: `summarize_after_turns`, `history_window`, `inject_as` | ❌ / частично | используются `max_facts`, `use_llm_extract` |
+| Админка: активные `skill_runs`, заявки, импорт/экспорт | ❌ план (данные уже в БД) | `skill_runs`, `contact_requests` |
+
+Первый агентный навык — `contact-request`; реализация и детали: `docs/contact-request-skill.md`.
+
+---
+
 ## 1. Зачем
 
 Сейчас один системный промпт обслуживает разные сценарии: лекарства, упражнения, быт, проекты фонда, правовая поддержка, поиск врача, эмоциональная поддержка. Всё в одном файле:
@@ -31,7 +54,7 @@
 |--------|------|---------------|----------------------|---------|
 | **`domain`** | Тема ответа по КБ | Семантический матч вопроса | Промпт + retrieval boost/hints + follow-ups | `medications`, `find-doctor` |
 | **`context`** | Режим работы с диалогом | По политике тенанта: always-on, по матчу, или по флагу | Сборка history, память сессии, «внимание» к уточнениям | `dialogue-memory`, `attention` |
-| **`workflow`** | Агентный сценарий (многошаговый) | Явный intent / матч + подтверждение пользователя | Промпт-процедура + **state машины** + **tools** | `book-consultation`, `request-callback` |
+| **`workflow`** | Агентный сценарий (многошаговый) | Явный intent / матч + подтверждение пользователя | Промпт-процедура + **state машины** + **tools** | `book-consultation`, `contact-request` |
 
 Правила совместимости:
 
@@ -111,11 +134,15 @@
 
 **Решение:** runtime читает навыки только из БД. Опциональный каталог `config/skills/*.md` (или seed в коде) — для первичного наполнения тенанта «Паркинсон» и переноса шаблонов между стендами. После сида источник истины — строки в SQLite.
 
+> **Статус:** реализован только seed в коде — `packages/skills/seeds.py`. Каталога `config/skills`, переменной `SKILLS_SEED_DIR` и импорта/экспорта `SKILL.md` в коде нет.
+
 Это не противоречит стандарту Agent Skills: стандарт задаёт *семантику* навыка (name, description, instructions, progressive disclosure). Где лежат байты — деталь продукта; у coding-агентов это FS, у нас — таблицы рядом с промптом организации.
 
 ### 4.2. Схема (черновик)
 
 В том же файле БД платформы (`PLATFORM_DB` / существующий store):
+
+> **Статус:** `skills`, `skill_examples`, `skill_runs` и `contact_requests` реализованы (последние две — для `contact-request`). `dialogue_memories` создаётся `DialogueStore` в той же БД, фактически `UNIQUE (session_id, key)`.
 
 ```sql
 CREATE TABLE skills (
@@ -207,7 +234,7 @@ CREATE TABLE dialogue_memories (
 | `enabled` | да | выкл. без удаления |
 | `retrieval_boost` | нет | domain: forced candidates из knowledge |
 | `query_hints` | нет | domain: обогащение retrieval-query |
-| `allowed_tools` | нет | workflow: whitelist инструментов API |
+| `allowed_tools` | нет | workflow: whitelist инструментов API (проверяется в `packages/skills/tools.py`) |
 | `config` | нет | type-specific JSON |
 | `examples[]` | для `match`/`intent` | 5–15 эталонных фраз |
 
@@ -252,6 +279,8 @@ metadata:
 ---
 
 ## 5. Runtime: как навык меняет ответ
+
+> **Статус:** выполняются все шаги. Для `contact-request` шаги 2 и 5 реализованы (`packages/skills/workflow.py`); при активном сценарии шаг обрабатывается им, иначе — обычный порядок safety → attention → context-навыки → domain route → memory → слоты.
 
 На каждый запрос `/v1/chat`:
 
@@ -330,6 +359,8 @@ metadata:
 
 ## 7. Workflow-навыки и агентность
 
+> **Статус:** реализовано для `contact-request` — `skill_runs`, intent, tool-layer и проверка `allowed_tools` (`packages/skills/workflow.py`, `contact_request.py`, `tools.py`). Раздел остаётся общим дизайном для будущих сценариев.
+
 Агентность = навык + **state machine** + **tools**, а не «длинный промпт с просьбой записаться». Стандарт Agent Skills как раз предполагает optional tools / scripts; у нас tools — серверные функции с аудитом.
 
 ### 7.1. Паттерн
@@ -359,7 +390,11 @@ LLM ведёт *диалог* и формулировки; **истина по �
 
 - Нет tool вне whitelist навыка и тенанта.
 - Нет записи без явного confirm-step.
-- ПДн (телефон) — только в слотах/заявке; не в публичные логи ответов.
+- Для `contact-request`: явная просьба связаться **и** контакт (телефон / email / MAX / Telegram)
+  считаются подтверждением — отдельный confirm не нужен, подтверждение даётся после отправки:
+  «Наш специалист свяжется с вами в ближайшее время.» Если контакт выведен из старых ходов или
+  канал неоднозначен (`@username` без Telegram/MAX), confirm обязателен.
+- ПДн (телефон, email, ники MAX/Telegram) — только в слотах/заявке; не в публичные логи ответов.
 - Crisis / safety gate прерывает workflow.
 - Операторская админка: список заявок, статус skill_run.
 
@@ -379,19 +414,24 @@ LLM ведёт *диалог* и формулировки; **истина по �
 | `exercises` | Гимнастика, ходьба, застывания, тай-чи | Гимнастика, упражнения, методичка |
 | `daily-living` | Быт, питание, сон, падения, поездки | Питание, Сон, методичка, запоры |
 | `fund-projects` | Проекты и сообщество фонда | Навигатор, О фонде |
-| `legal-support` | Правовая поддержка | правовая поддержка БП 2026 |
+| `legal-social` | Правовая и социальная поддержка | правовая поддержка БП 2026 |
 | `find-doctor` | Поиск / список врачей | Список врачей |
 
 Старт с **3–4** domain (medications, exercises, fund-projects, find-doctor).
 
 ### 8.2. Context / workflow (после стабилизации domain)
 
-| `name` | type | activation | Когда браться |
-|--------|------|------------|---------------|
-| `dialogue-memory` | context | always | После метрик «забывает имя/тему» |
-| `attention` | context | always | Вместе с memory или вместо неё на старте |
-| `book-consultation` | workflow | intent | Когда появится канал заявки/слотов |
-| `request-callback` | workflow | intent | Упрощённый вариант записи (только телефон) |
+| `name` | type | activation | Когда браться | Статус |
+|--------|------|------------|---------------|--------|
+| `dialogue-memory` | context | always | После метрик «забывает имя/тему» | ✅ |
+| `attention` | context | always | Вместе с memory или вместо неё на старте | ✅ |
+| `book-consultation` | workflow | intent | Когда появится канал заявки/слотов | план |
+| `contact-request` | workflow | intent | Просит связаться / оставить обращение / спрашивает «как связаться» / предлагает сотрудничество | ✅ см. `docs/contact-request-skill.md` |
+
+`contact-request` отправляет письмо **только** при наличии контакта: телефон, email, MAX или
+Telegram. На вопрос «как связаться» ассистент сначала отвечает контактами фонда по КБ и
+предлагает оставить свой контакт; после получения контакта — письмо и подтверждение
+«Наш специалист свяжется с вами в ближайшее время.»
 
 ---
 
@@ -431,22 +471,32 @@ LLM ведёт *диалог* и формулировки; **истина по �
 - для workflow: просмотр активных `skill_runs` / заявок;
 - кнопки: seed шаблонов, экспорт в `SKILL.md`.
 
-API (черновик):
+> **Статус:** реализованы таблица, форма description/body/activation/boost/hints/examples, вкл/выкл, preview domain и seed. `skill_runs`/`contact_requests` уже пишутся в БД, но админ-вкладки и редактор `allowed_tools`/`config`/шагов — план.
 
-| Метод | Путь | Назначение |
-|-------|------|------------|
-| GET/POST | `/v1/…/skills` | список / создать |
-| GET/PATCH/DELETE | `/v1/…/skills/{id}` | чтение / правка / удаление |
-| PUT | `/v1/…/skills/{id}/examples` | заменить examples |
-| POST | `/v1/…/skills/preview` | `{question}` → scored skills по type |
-| POST | `/v1/…/skills/seed` | идемпотентный сид |
-| GET | `/v1/…/skill-runs` | активные/недавние сценарии (оператор) |
+API:
+
+| Метод | Путь | Назначение | Статус |
+|-------|------|------------|--------|
+| GET/POST | `/v1/admin/skills` | список / создать | ✅ |
+| GET/PATCH/DELETE | `/v1/admin/skills/{id}` | чтение / правка / удаление | ✅ |
+| PUT | `/v1/admin/skills/{id}/examples` | заменить examples | ❌ examples меняются через PATCH |
+| POST | `/v1/admin/skills/preview` | `{question}` → scored skills по type | ✅ (domain) |
+| POST | `/v1/admin/skills/seed` | идемпотентный сид | ✅ |
+| GET | `/v1/admin/skill-runs` | активные/недавние сценарии | ❌ план |
+| GET | `/v1/admin/contact-requests` | история передач обращений | ❌ план, см. `docs/contact-request-skill.md` |
 
 ```env
 SKILLS_ENABLED=true
-SKILLS_SCORE_THRESHOLD=0.35
+# SKILLS_SCORE_THRESHOLD не задавать: код выбирает порог по EMBEDDINGS_PROVIDER
+# local e5 ≈ 0.86, GigaChat ≈ 0.42
 SKILLS_MAX_ACTIVE=2
-SKILLS_SEED_DIR=/app/config/skills
+SKILLS_SCORE_MARGIN=0.04
+SKILLS_SUGGESTION_COUNT=3
+# SKILLS_SEED_DIR не используется: сиды в packages/skills/seeds.py
+
+# contact-request (workflow)
+CONTACT_REQUEST_ENABLED=true
+# CONTACT_REQUEST_LOG_CONTACTS=false  # true — писать контакты в логи (отладка)
 ```
 
 Бэкап навыков и memory/runs = бэкап platform SQLite (+ dialogue DB). Git — шаблоны сидов и этот документ.
@@ -468,6 +518,8 @@ SKILLS_SEED_DIR=/app/config/skills
 | **I. Интеграции** | Слоты календаря / CRM / уведомления оператору | Боевая запись |
 
 A–F можно делать, не блокируясь на агентности: колонки `skill_type`/`activation`/`allowed_tools`/`config` закладываем сразу (default `domain` / `match` / `[]` / `{}`).
+
+**Статус на 19.11.2026:** A–E — сделано; F — сделано без импорта/экспорта; G — сделано частично (`attention` + `dialogue-memory`, без `summarize_after_turns`/`history_window`); H — сделан первый сценарий `contact-request`; I — план.
 
 CLI ingest не зависит от навыков.
 
@@ -510,4 +562,6 @@ CLI ingest не зависит от навыков.
 - Базовый промпт: `config/default_system_prompt.md`
 - RAG: `packages/rag/pipeline.py`
 - Диалоги: `packages/dialogue/store.py`, переписывание уточнения: `packages/dialogue/followup.py`
+- Слоты и точные выборки: `packages/skills/slots.py`
 - Платформа: `packages/platform/store.py`
+- Первый агентный сценарий: `docs/contact-request-skill.md`

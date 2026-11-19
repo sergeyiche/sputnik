@@ -313,6 +313,7 @@ class RAGPipeline:
         boost_limit: int = 1,
         extra_chunks: list[RetrievedChunk] | None = None,
         skills: list[dict] | None = None,
+        suffix: str = "",
     ):
         """Async generator for SSE: yields text tokens, then a final ``{"sources": [...]}`` dict.
 
@@ -346,6 +347,11 @@ class RAGPipeline:
                 full_text += text
                 yield text
 
+        suffix = (suffix or "").strip()
+        if suffix:
+            addition = f"\n\n{suffix}"
+            full_text += addition
+            yield addition
         yield f"\n\n---\n{self._disclaimer}"
         _, sources = self._finalize_answer(full_text, chunks)
         yield {"sources": sources, "skills": skills or []}

@@ -4,6 +4,10 @@ from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv()
 
+from apps.api.app.logging_config import configure_logging
+
+configure_logging()
+
 from apps.api.app.api.routes import admin, chat, gigachat, health, knowledge, platform, suggestions, widget
 from apps.api.app.config import settings
 from apps.api.app.host_middleware import PlatformHostMiddleware

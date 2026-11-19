@@ -2,15 +2,29 @@
 
 from __future__ import annotations
 
+import base64
 import logging
 import smtplib
+from dataclasses import dataclass
 from email.message import EmailMessage
 
 logger = logging.getLogger(__name__)
 
 
+def _mask_email(value: str) -> str:
+    local, _, domain = (value or "").partition("@")
+    return f"{local[:2]}***@{domain}" if local and domain else value
+
+
 class MailtrapError(Exception):
     """Mail is not configured, or the server rejected the message."""
+
+
+@dataclass(frozen=True)
+class MailAttachment:
+    filename: str
+    content: bytes
+    mimetype: str = "text/plain"
 
 
 class MailtrapMailer:
@@ -36,6 +50,12 @@ class MailtrapMailer:
         self._smtp_port = smtp_port
 
     @property
+    def transport(self) -> str:
+        if self._transport == "smtp":
+            return "smtp"
+        return "mailtrap-sandbox" if self._use_sandbox else "mailtrap"
+
+    @property
     def configured(self) -> bool:
         if not self._sender_email:
             return False
@@ -47,30 +67,101 @@ class MailtrapMailer:
             return False
         return True
 
-    def send(self, *, to_email: str, subject: str, text: str) -> None:
+    def send(
+        self,
+        *,
+        to_email: str,
+        subject: str,
+        text: str,
+        attachments: list[MailAttachment] | None = None,
+        reply_to: str | None = None,
+    ) -> None:
         if not self.configured:
             raise MailtrapError("Отправка писем не настроена")
+        files = list(attachments or [])
         try:
             if self._transport == "smtp":
-                self._send_smtp(to_email=to_email, subject=subject, text=text)
+                self._send_smtp(
+                    to_email=to_email,
+                    subject=subject,
+                    text=text,
+                    attachments=files,
+                    reply_to=reply_to,
+                )
             else:
-                self._send_mailtrap(to_email=to_email, subject=subject, text=text)
+                self._send_mailtrap(
+                    to_email=to_email,
+                    subject=subject,
+                    text=text,
+                    attachments=files,
+                    reply_to=reply_to,
+                )
         except MailtrapError:
             raise
         except Exception as exc:
             logger.warning("Mail delivery to %s failed: %s", to_email, exc)
             raise MailtrapError("Не удалось отправить письмо") from exc
+        logger.info(
+            "mail.sent transport=%s to=%s attachments=%d subject_len=%d",
+            self.transport,
+            _mask_email(to_email),
+            len(files),
+            len(subject),
+        )
 
-    def _send_smtp(self, *, to_email: str, subject: str, text: str) -> None:
+    def _send_smtp(
+        self,
+        *,
+        to_email: str,
+        subject: str,
+        text: str,
+        attachments: list[MailAttachment],
+        reply_to: str | None,
+    ) -> None:
         message = EmailMessage()
         message["From"] = f"{self._sender_name} <{self._sender_email}>"
         message["To"] = to_email
         message["Subject"] = subject
+        if reply_to:
+            message["Reply-To"] = reply_to
         message.set_content(text)
+        for item in attachments:
+            maintype, _, subtype = item.mimetype.partition("/")
+            payload: bytes | str = item.content
+            params: dict[str, str] = {}
+            if maintype == "text":
+                try:
+                    payload = item.content.decode("utf-8")
+                except UnicodeDecodeError:
+                    pass
+                else:
+                    params["charset"] = "utf-8"
+            if isinstance(payload, str):
+                message.add_attachment(
+                    payload,
+                    filename=item.filename,
+                    subtype=subtype or "plain",
+                    **params,
+                )
+            else:
+                message.add_attachment(
+                    payload,
+                    maintype=maintype or "application",
+                    subtype=subtype or "octet-stream",
+                    filename=item.filename,
+                )
         with smtplib.SMTP(self._smtp_host, self._smtp_port, timeout=10) as smtp:
             smtp.send_message(message)
 
-    def _send_mailtrap(self, *, to_email: str, subject: str, text: str) -> None:
+    def _send_mailtrap(
+        self,
+        *,
+        to_email: str,
+        subject: str,
+        text: str,
+        attachments: list[MailAttachment],
+        reply_to: str | None,
+    ) -> None:
         import mailtrap as mt
 
         if self._use_sandbox:
@@ -82,5 +173,15 @@ class MailtrapMailer:
             to=[mt.Address(email=to_email)],
             subject=subject,
             text=text,
+            attachments=[
+                mt.Attachment(
+                    content=base64.b64encode(item.content),
+                    filename=item.filename,
+                    mimetype=item.mimetype,
+                )
+                for item in attachments
+            ]
+            or None,
+            reply_to=mt.Address(email=reply_to) if reply_to else None,
         )
         client.send(message)

@@ -139,6 +139,42 @@ class UsageDay:
     http_402: int
 
 
+@dataclass(frozen=True)
+class SkillRun:
+    id: int
+    tenant_id: int
+    session_id: str
+    skill_id: int
+    status: str
+    step: str
+    slots: dict[str, Any]
+    action: dict[str, Any]
+    attempts: int
+    created_at: str
+    updated_at: str
+
+
+@dataclass(frozen=True)
+class ContactRequest:
+    id: int
+    tenant_id: int
+    session_id: str
+    skill_run_id: int | None
+    kind: str
+    to_email: str
+    reply_to: str
+    subject: str
+    summary: str
+    summary_source: str
+    contacts: dict[str, Any]
+    transcript_name: str
+    transcript_bytes: int
+    truncated: bool
+    status: str
+    error: str
+    created_at: str
+
+
 class PlatformStore:
     def __init__(self, db_path: Path) -> None:
         self._path = db_path
@@ -792,6 +828,268 @@ class PlatformStore:
         if not deleted:
             raise TenantNotFoundError("Навык не найден")
 
+    # --- skill runs / contact requests -------------------------------------------------
+
+    def active_skill_run(self, tenant_id: int, session_id: str) -> SkillRun | None:
+        with self._lock, self._session() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM skill_runs
+                WHERE tenant_id = ? AND session_id = ? AND status = 'active'
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (tenant_id, session_id),
+            ).fetchone()
+        return self._skill_run_from_row(row) if row is not None else None
+
+    def start_skill_run(
+        self,
+        tenant_id: int,
+        session_id: str,
+        skill_id: int,
+        step: str,
+        slots: dict[str, Any] | None = None,
+    ) -> SkillRun:
+        stamp = _now()
+        with self._lock, self._session() as conn:
+            try:
+                cursor = conn.execute(
+                    """
+                    INSERT INTO skill_runs (
+                        tenant_id, session_id, skill_id, status, step,
+                        slots_json, action_json, attempts, created_at, updated_at
+                    ) VALUES (?, ?, ?, 'active', ?, ?, '{}', 0, ?, ?)
+                    """,
+                    (
+                        tenant_id,
+                        session_id,
+                        skill_id,
+                        step,
+                        json.dumps(slots or {}, ensure_ascii=False),
+                        stamp,
+                        stamp,
+                    ),
+                )
+            except sqlite3.IntegrityError:
+                row = conn.execute(
+                    """
+                    SELECT * FROM skill_runs
+                    WHERE tenant_id = ? AND session_id = ? AND status = 'active'
+                    ORDER BY id DESC
+                    LIMIT 1
+                    """,
+                    (tenant_id, session_id),
+                ).fetchone()
+                if row is None:
+                    raise
+                return self._skill_run_from_row(row)
+            row = conn.execute(
+                "SELECT * FROM skill_runs WHERE id = ?",
+                (int(cursor.lastrowid),),
+            ).fetchone()
+        if row is None:
+            raise PlatformError("Не удалось создать сценарий")
+        return self._skill_run_from_row(row)
+
+    def save_skill_run(
+        self,
+        tenant_id: int,
+        run_id: int,
+        *,
+        step: str | None = None,
+        slots: dict[str, Any] | None = None,
+        action: dict[str, Any] | None = None,
+        status: str | None = None,
+        attempts: int | None = None,
+    ) -> SkillRun:
+        sets: list[str] = []
+        values: list[Any] = []
+        if step is not None:
+            sets.append("step = ?")
+            values.append(step)
+        if slots is not None:
+            sets.append("slots_json = ?")
+            values.append(json.dumps(slots, ensure_ascii=False))
+        if action is not None:
+            sets.append("action_json = ?")
+            values.append(json.dumps(action, ensure_ascii=False))
+        if status is not None:
+            sets.append("status = ?")
+            values.append(status)
+        if attempts is not None:
+            sets.append("attempts = ?")
+            values.append(int(attempts))
+        sets.append("updated_at = ?")
+        values.append(_now())
+        values.extend([run_id, tenant_id])
+        with self._lock, self._session() as conn:
+            changed = conn.execute(
+                f"UPDATE skill_runs SET {', '.join(sets)} WHERE id = ? AND tenant_id = ?",
+                values,
+            ).rowcount
+            if not changed:
+                raise TenantNotFoundError("Сценарий не найден")
+            row = conn.execute(
+                "SELECT * FROM skill_runs WHERE id = ? AND tenant_id = ?",
+                (run_id, tenant_id),
+            ).fetchone()
+        if row is None:
+            raise TenantNotFoundError("Сценарий не найден")
+        return self._skill_run_from_row(row)
+
+    def close_skill_run(
+        self,
+        tenant_id: int,
+        run_id: int,
+        *,
+        status: str,
+        action: dict[str, Any] | None = None,
+    ) -> None:
+        self.save_skill_run(
+            tenant_id,
+            run_id,
+            status=status,
+            action=action,
+        )
+
+    def recent_contact_request(
+        self,
+        tenant_id: int,
+        session_id: str,
+        *,
+        within_seconds: int = 600,
+    ) -> ContactRequest | None:
+        cutoff = (datetime.now(UTC) - timedelta(seconds=max(0, int(within_seconds)))).isoformat()
+        with self._lock, self._session() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM contact_requests
+                WHERE tenant_id = ? AND session_id = ? AND status = 'sent' AND created_at >= ?
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (tenant_id, session_id, cutoff),
+            ).fetchone()
+        return self._contact_request_from_row(row) if row is not None else None
+
+    def count_contact_requests(self, tenant_id: int, *, since: str) -> int:
+        with self._lock, self._session() as conn:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS total FROM contact_requests
+                WHERE tenant_id = ? AND status = 'sent' AND created_at >= ?
+                """,
+                (tenant_id, since),
+            ).fetchone()
+        return int(row["total"] if row is not None else 0)
+
+    def record_contact_request(
+        self,
+        *,
+        tenant_id: int,
+        session_id: str,
+        skill_run_id: int | None,
+        kind: str,
+        to_email: str,
+        reply_to: str,
+        subject: str,
+        summary: str,
+        summary_source: str,
+        contacts: dict[str, Any],
+        transcript_name: str,
+        transcript_bytes: int,
+        truncated: bool,
+        status: str,
+        error: str = "",
+    ) -> ContactRequest:
+        with self._lock, self._session() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO contact_requests (
+                    tenant_id, session_id, skill_run_id, kind, to_email, reply_to,
+                    subject, summary, summary_source, contacts_json,
+                    transcript_name, transcript_bytes, truncated, status, error, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    tenant_id,
+                    session_id,
+                    skill_run_id,
+                    kind,
+                    to_email,
+                    reply_to,
+                    subject,
+                    summary,
+                    summary_source,
+                    json.dumps(contacts, ensure_ascii=False),
+                    transcript_name,
+                    int(transcript_bytes),
+                    1 if truncated else 0,
+                    status,
+                    error,
+                    _now(),
+                ),
+            )
+            row = conn.execute(
+                "SELECT * FROM contact_requests WHERE id = ?",
+                (int(cursor.lastrowid),),
+            ).fetchone()
+        if row is None:
+            raise PlatformError("Не удалось сохранить обращение")
+        return self._contact_request_from_row(row)
+
+    def list_contact_requests(self, tenant_id: int, *, limit: int = 50) -> list[ContactRequest]:
+        with self._lock, self._session() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM contact_requests
+                WHERE tenant_id = ?
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (tenant_id, max(1, min(int(limit), 500))),
+            ).fetchall()
+        return [self._contact_request_from_row(row) for row in rows]
+
+    @staticmethod
+    def _skill_run_from_row(row: sqlite3.Row) -> SkillRun:
+        return SkillRun(
+            id=int(row["id"]),
+            tenant_id=int(row["tenant_id"]),
+            session_id=row["session_id"],
+            skill_id=int(row["skill_id"]),
+            status=row["status"],
+            step=row["step"],
+            slots=_json_dict(row["slots_json"]),
+            action=_json_dict(row["action_json"]),
+            attempts=int(row["attempts"] or 0),
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+
+    @staticmethod
+    def _contact_request_from_row(row: sqlite3.Row) -> ContactRequest:
+        return ContactRequest(
+            id=int(row["id"]),
+            tenant_id=int(row["tenant_id"]),
+            session_id=row["session_id"],
+            skill_run_id=int(row["skill_run_id"]) if row["skill_run_id"] is not None else None,
+            kind=row["kind"],
+            to_email=row["to_email"],
+            reply_to=row["reply_to"] or "",
+            subject=row["subject"],
+            summary=row["summary"] or "",
+            summary_source=row["summary_source"] or "fallback",
+            contacts=_json_dict(row["contacts_json"]),
+            transcript_name=row["transcript_name"] or "",
+            transcript_bytes=int(row["transcript_bytes"] or 0),
+            truncated=bool(row["truncated"]),
+            status=row["status"],
+            error=row["error"] or "",
+            created_at=row["created_at"],
+        )
+
     def seed_parkinson_skills(self, tenant_id: int) -> list[Skill]:
         """Idempotent seed of templates (create missing; refresh Russian seed texts).
 
@@ -1213,6 +1511,46 @@ class PlatformStore:
                     text TEXT NOT NULL,
                     UNIQUE (skill_id, text)
                 );
+                CREATE TABLE IF NOT EXISTS skill_runs (
+                    id INTEGER PRIMARY KEY,
+                    tenant_id INTEGER NOT NULL,
+                    session_id TEXT NOT NULL,
+                    skill_id INTEGER NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'active',
+                    step TEXT NOT NULL,
+                    slots_json TEXT NOT NULL DEFAULT '{}',
+                    action_json TEXT NOT NULL DEFAULT '{}',
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_skill_runs_one_active
+                    ON skill_runs (tenant_id, session_id) WHERE status = 'active';
+                CREATE INDEX IF NOT EXISTS idx_skill_runs_tenant_status
+                    ON skill_runs (tenant_id, status, updated_at DESC);
+                CREATE TABLE IF NOT EXISTS contact_requests (
+                    id INTEGER PRIMARY KEY,
+                    tenant_id INTEGER NOT NULL,
+                    session_id TEXT NOT NULL,
+                    skill_run_id INTEGER,
+                    kind TEXT NOT NULL DEFAULT 'other',
+                    to_email TEXT NOT NULL,
+                    reply_to TEXT NOT NULL DEFAULT '',
+                    subject TEXT NOT NULL,
+                    summary TEXT NOT NULL DEFAULT '',
+                    summary_source TEXT NOT NULL DEFAULT 'fallback',
+                    contacts_json TEXT NOT NULL DEFAULT '{}',
+                    transcript_name TEXT NOT NULL DEFAULT '',
+                    transcript_bytes INTEGER NOT NULL DEFAULT 0,
+                    truncated INTEGER NOT NULL DEFAULT 0,
+                    status TEXT NOT NULL,
+                    error TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_contact_requests_tenant_created
+                    ON contact_requests (tenant_id, created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_contact_requests_session
+                    ON contact_requests (session_id, created_at DESC);
                 """
             )
             columns = {row[1] for row in conn.execute("PRAGMA table_info(users)")}
@@ -1326,7 +1664,7 @@ class PlatformStore:
                     fields["body"],
                     fields["priority"],
                     fields["sticky_turns"],
-                    1,
+                    1 if fields["enabled"] else 0,
                     json.dumps(fields["retrieval_boost"], ensure_ascii=False),
                     json.dumps(fields["query_hints"], ensure_ascii=False),
                     json.dumps(fields["allowed_tools"], ensure_ascii=False),

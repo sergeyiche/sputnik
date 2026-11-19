@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import uuid
 from dataclasses import dataclass, replace
@@ -15,6 +16,7 @@ from apps.api.app.deps import (
     get_active_source_catalog,
     get_dialogue_store,
     get_knowledge_dir,
+    get_mailer,
     get_platform_store,
     get_rag_pipeline,
     get_skill_router,
@@ -28,9 +30,11 @@ from packages.dialogue.memory import MemoryFact, extract_facts, inject_memory_bl
 from packages.dialogue.store import DialogueStore
 from packages.integrations.gigachat.auth import get_gigachat_auth_service
 from packages.integrations.gigachat.errors import is_gigachat_auth_error
+from packages.integrations.mailtrap import MailtrapMailer
 from packages.knowledge.base import RetrievedChunk
 from packages.rag.pipeline import RAGPipeline, RAGResponse
 from packages.security.disclaimer import MEDICAL_DISCLAIMER, append_disclaimer, is_suspicious_query
+from packages.skills.models import Skill
 from packages.skills.runtime import (
     SkillTurn,
     apply_skills,
@@ -44,6 +48,13 @@ from packages.skills.slots import (
     city_stem,
     load_cities,
     plan_turn,
+)
+from packages.skills.tools import ToolContext, call_tool
+from packages.skills.workflow import (
+    PendingAction,
+    WorkflowTurn,
+    find_contact_skill,
+    plan_workflow_turn,
 )
 
 router = APIRouter(prefix="/v1", tags=["chat"])
@@ -86,6 +97,10 @@ class PreparedTurn:
     prompt_topic: str
     prompt_meaning: str
     skill_turn: SkillTurn | None = None
+    workflow: WorkflowTurn | None = None
+    workflow_skill: Skill | None = None
+    action: PendingAction | None = None
+    answer_suffix: str = ""
     clarification: str | None = None
     direct_answer: str | None = None
     extra_chunks: tuple[RetrievedChunk, ...] = ()
@@ -97,6 +112,7 @@ async def chat(
     http_request: Request,
     dialogue: DialogueStore = Depends(get_dialogue_store),
     rag: RAGPipeline = Depends(get_rag_pipeline),
+    mailer: MailtrapMailer = Depends(get_mailer),
     session_id: str | None = Cookie(default=None, alias=settings.session_cookie_name),
 ):
     tenant = _require_chat_tenant()
@@ -108,6 +124,16 @@ async def chat(
         http_request.headers.get("x-session-id") or session_id,
         request.message,
     )
+    if prepared.action is not None:
+        prepared = _execute_action(
+            prepared,
+            rag=rag,
+            dialogue=dialogue,
+            tenant=tenant,
+            tenant_id=tenant_id,
+            mailer=mailer,
+            question=request.message,
+        )
 
     if (prepared.clarification or prepared.direct_answer) and not request.stream:
         return _direct_response(
@@ -148,8 +174,6 @@ async def chat(
             skills=(skill.payload() if skill else []),
         )
     except Exception as exc:
-        import logging
-
         logging.getLogger("uvicorn.error").exception("Chat failed: %s", exc)
         _record_chat_error(tenant, exc)
         raise HTTPException(
@@ -162,11 +186,13 @@ async def chat(
             ),
         ) from exc
 
+    disclaimer = _disclaimer_for(tenant)
+    answer = _with_answer_suffix(result.answer, prepared.answer_suffix, disclaimer)
     sid = dialogue.record_exchange(
         prepared.session_id,
         tenant_id=tenant_id,
         user_text=request.message,
-        answer_text=result.answer,
+        answer_text=answer,
         sources=result.sources,
         topic=prepared.new_topic,
     )
@@ -180,9 +206,8 @@ async def chat(
     )
     _record_chat_usage(tenant, result)
 
-    disclaimer = _disclaimer_for(tenant)
     payload = ChatResponse(
-        answer=result.answer,
+        answer=answer,
         sources=result.sources,
         session_id=sid,
         disclaimer=disclaimer,
@@ -279,6 +304,30 @@ def _prepare_turn(
         text = question.strip()
         search_query, new_topic = text, text
 
+    workflow_skill = find_contact_skill(store, tenant_id)
+    workflow = plan_workflow_turn(
+        store=store,
+        tenant_id=tenant_id,
+        session_id=session_id,
+        question=question,
+        history=history,
+        skill=workflow_skill,
+    )
+    if workflow is not None and workflow.mode == "direct":
+        return PreparedTurn(
+            session_id=session_id,
+            history=history,
+            search_query=search_query,
+            new_topic=new_topic,
+            prompt_topic=(topic or new_topic) if continuation else "",
+            prompt_meaning=search_query if continuation else "",
+            workflow=workflow,
+            workflow_skill=workflow_skill,
+            direct_answer=workflow.answer,
+            action=workflow.action,
+        )
+    answer_suffix = workflow.answer_suffix if workflow is not None else ""
+
     base_prompt = get_system_prompt_store().active_text()
     skill_turn = apply_skills(
         store=store,
@@ -319,6 +368,9 @@ def _prepare_turn(
             prompt_topic=(topic or new_topic) if continuation else "",
             prompt_meaning=search_query if continuation else "",
             skill_turn=skill_turn,
+            workflow=workflow,
+            workflow_skill=workflow_skill,
+            answer_suffix=answer_suffix,
             clarification=adjustment.clarification,
         )
     if adjustment.city:
@@ -343,6 +395,10 @@ def _prepare_turn(
         prompt_topic=(topic or new_topic) if continuation else "",
         prompt_meaning=search_query if continuation else "",
         skill_turn=skill_turn,
+        workflow=workflow,
+        workflow_skill=workflow_skill,
+        action=workflow.action if workflow is not None else None,
+        answer_suffix=answer_suffix,
         direct_answer=adjustment.direct_answer,
         extra_chunks=adjustment.exact_chunks,
     )
@@ -360,6 +416,69 @@ def _add_city(text: str, city: str) -> str:
     if city.casefold() in lowered:
         return text
     return f"{text} {city}".strip()
+
+
+def _with_answer_suffix(answer: str, suffix: str, disclaimer: str) -> str:
+    """Append a workflow offer before the medical disclaimer when possible."""
+    suffix = (suffix or "").strip()
+    if not suffix:
+        return answer
+    base = (answer or "").rstrip()
+    marker = (disclaimer or "").strip()
+    if marker and base.endswith(marker):
+        return f"{base[:-len(marker)].rstrip()}\n\n{suffix}\n\n{marker}"
+    return f"{base}\n\n{suffix}".strip()
+
+
+def _contact_failure_message(config: dict) -> str:
+    fallback = str((config or {}).get("fallback_contact") or "").strip()
+    if fallback:
+        return f"Не получилось передать автоматически. Напишите, пожалуйста, на {fallback}."
+    return "Не получилось передать автоматически. Попробуйте, пожалуйста, ещё раз."
+
+
+def _execute_action(
+    prepared: PreparedTurn,
+    *,
+    rag: RAGPipeline,
+    dialogue: DialogueStore,
+    tenant,
+    tenant_id: int | None,
+    mailer: MailtrapMailer,
+    question: str,
+) -> PreparedTurn:
+    action = prepared.action
+    skill = prepared.workflow_skill
+    workflow = prepared.workflow
+    if action is None:
+        return prepared
+    if skill is None or workflow is None or tenant_id is None or tenant is None:
+        message = _contact_failure_message({})
+        if workflow is not None and workflow.mode == "offer":
+            return replace(prepared, action=None, answer_suffix=message)
+        return replace(prepared, action=None, direct_answer=message)
+    config = skill.config if isinstance(skill.config, dict) else {}
+    context = ToolContext(
+        tenant=tenant,
+        tenant_id=tenant_id,
+        session_id=prepared.session_id,
+        dialogue=dialogue,
+        llm=getattr(rag, "llm", None),
+        mailer=mailer,
+        store=get_platform_store(),
+        skill=skill,
+        question=question,
+        config=config,
+    )
+    try:
+        result = call_tool(action.tool, skill=skill, payload=action.payload, context=context)
+        message = result.message or _contact_failure_message(config)
+    except Exception:
+        logging.getLogger(__name__).exception("contact-request tool failed")
+        message = _contact_failure_message(config)
+    if workflow.mode == "offer":
+        return replace(prepared, action=None, answer_suffix=message)
+    return replace(prepared, action=None, direct_answer=message)
 
 
 def _attach_memory_facts(
@@ -446,6 +565,8 @@ def _direct_response(
     """Answer from a slot question or an exact lookup without retrieval/LLM."""
     disclaimer = _disclaimer_for(tenant)
     text = prepared.direct_answer or prepared.clarification or ""
+    if prepared.answer_suffix:
+        text = f"{text.rstrip()}\n\n{prepared.answer_suffix.strip()}"
     answer = append_disclaimer(text, disclaimer)
     sources = _direct_sources(tenant, prepared) if prepared.direct_answer else []
     sid = dialogue.record_exchange(
@@ -548,6 +669,8 @@ async def _stream_answer(
     if prepared.clarification or prepared.direct_answer:
         disclaimer = _disclaimer_for(tenant)
         text = prepared.direct_answer or prepared.clarification or ""
+        if prepared.answer_suffix:
+            text = f"{text.rstrip()}\n\n{prepared.answer_suffix.strip()}"
         answer = append_disclaimer(text, disclaimer)
         sources = _direct_sources(tenant, prepared) if prepared.direct_answer else []
         yield f"data: {json.dumps({'token': answer}, ensure_ascii=False)}\n\n"
@@ -596,6 +719,7 @@ async def _stream_answer(
             boost_limit=(skill.boost_limit if skill else 1),
             extra_chunks=list(prepared.extra_chunks),
             skills=skills,
+            suffix=prepared.answer_suffix,
         ):
             if isinstance(item, dict):
                 sources = item.get("sources", [])
