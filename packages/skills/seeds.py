@@ -400,6 +400,12 @@ PARKINSON_WORKFLOW_SKILLS: list[dict[str, Any]] = [
             "subject_prefix": "[Спутник]",
             "fallback_contact": "info@fondparkinson.ru",
             "confirmation_text": "Наш специалист свяжется с вами в ближайшее время.",
+            "contact_info_text": (
+                "С фондом можно связаться:\n"
+                "- Почта: info@fondparkinson.ru\n"
+                "- Сайт: https://fondparkinson.ru/\n"
+                "- Telegram: https://t.me/fondparkinson"
+            ),
             "offer_text": (
                 "Если удобнее, оставьте свой телефон, email, MAX или Telegram — "
                 "передам специалисту."

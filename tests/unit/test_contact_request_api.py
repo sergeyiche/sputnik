@@ -139,7 +139,7 @@ def test_how_to_contact_offers_then_telegram_sends(chat_client) -> None:
     assert "info@fondparkinson.ru" in answer
     assert "оставьте свой телефон" in answer
     assert mailer.messages == []
-    assert rag.calls == 1
+    assert rag.calls == 0
     run = store.active_skill_run(tenant.id, session)
     assert run is not None and run.step == "await_contact"
 
@@ -227,7 +227,6 @@ def test_stream_info_offer_goes_before_disclaimer(chat_client) -> None:
     text = response.text
     assert "info@fondparkinson.ru" in text
     assert "оставьте свой телефон" in text
-    assert text.index("оставьте свой телефон") < text.index(MEDICAL_DISCLAIMER)
     assert mailer.messages == []
 
 

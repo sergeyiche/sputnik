@@ -65,10 +65,11 @@ def test_info_question_offers_contact_without_action(tmp_path: Path) -> None:
     turn = _plan(store, tenant.id, "sess-info-1", "Как с вами связаться?", skill)
 
     assert turn is not None
-    assert turn.mode == "offer"
+    assert turn.mode == "direct"
     assert turn.step == "await_contact"
     assert turn.action is None
-    assert "телефон" in turn.answer_suffix and "Telegram" in turn.answer_suffix
+    assert "info@fondparkinson.ru" in turn.answer
+    assert "оставьте свой телефон" in turn.answer
     run = store.active_skill_run(tenant.id, "sess-info-1")
     assert run is not None and run.step == "await_contact"
     assert store.list_contact_requests(tenant.id) == []
@@ -140,10 +141,11 @@ def test_info_and_contact_in_one_message_keeps_rag_answer(tmp_path: Path) -> Non
         skill,
     )
     assert turn is not None
-    assert turn.mode == "offer"
+    assert turn.mode == "direct"
     assert turn.action is not None
-    assert turn.answer == ""
-    assert turn.answer_suffix == "Наш специалист свяжется с вами в ближайшее время."
+    assert "info@fondparkinson.ru" in turn.answer
+    assert turn.append_action_message is True
+    assert turn.answer_suffix == ""
 
 
 @pytest.mark.parametrize(
@@ -266,9 +268,9 @@ def test_info_with_ambiguous_handle_keeps_offer_mode(tmp_path: Path) -> None:
     skill = _skill(store, tenant.id)
     turn = _plan(store, tenant.id, "sess-info-handle", "Как связаться? @anna", skill)
     assert turn is not None
-    assert turn.mode == "offer"
-    assert turn.answer == ""
-    assert "Telegram или MAX" in turn.answer_suffix
+    assert turn.mode == "direct"
+    assert "info@fondparkinson.ru" in turn.answer
+    assert "Telegram или MAX" in turn.answer
 
 
 def test_bare_no_cancels_active_run(tmp_path: Path) -> None:

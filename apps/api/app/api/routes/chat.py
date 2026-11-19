@@ -476,6 +476,10 @@ def _execute_action(
     except Exception:
         logging.getLogger(__name__).exception("contact-request tool failed")
         message = _contact_failure_message(config)
+    if workflow.append_action_message:
+        base = (prepared.direct_answer or "").rstrip()
+        combined = f"{base}\n\n{message}" if base else message
+        return replace(prepared, action=None, direct_answer=combined)
     if workflow.mode == "offer":
         return replace(prepared, action=None, answer_suffix=message)
     return replace(prepared, action=None, direct_answer=message)

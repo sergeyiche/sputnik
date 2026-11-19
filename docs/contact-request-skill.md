@@ -52,7 +52,7 @@
 
 | Сценарий | Пример | Результат |
 |---|---|---|
-| Спрашивает, как связаться с фондом | «Как с вами связаться?» / «Куда написать?» | Ответ по КБ с контактами фонда **+ предложение оставить свой контакт**; письма нет, `skill_run = await_contact` |
+| Спрашивает, как связаться с фондом | «Как с вами связаться?» / «Куда написать?» | Детерминированный блок контактов фонда **+ предложение оставить свой контакт**; письма нет, `skill_run = await_contact` |
 | Пациент просит связаться, есть телефон | «Перезвоните мне, меня зовут Анна, +7 999 123-45-67» | Письмо в фонд, тип `patient`, телефон в теле |
 | Близкий просит связаться | «Мужу поставили диагноз, хотим поговорить с координатором, 8 999…» | Письмо, тип `caregiver` |
 | Организация предлагает сотрудничество | «ООО „Ромашка“ предлагает фонду совместный проект. Иван, ivan@…» | Письмо, тип `partnership`, организация в теме |
@@ -217,6 +217,7 @@ Uvicorn настраивает только `uvicorn`, `uvicorn.error`, `uvicorn
   "subject_prefix": "[Спутник]",
   "fallback_contact": "info@fondparkinson.ru",
   "confirmation_text": "Наш специалист свяжется с вами в ближайшее время.",
+  "contact_info_text": "С фондом можно связаться:\n- Почта: info@fondparkinson.ru\n- Сайт: https://fondparkinson.ru/\n- Telegram: https://t.me/fondparkinson",
   "offer_text": "Если удобнее, оставьте свой телефон, email, MAX или Telegram — передам специалисту.",
   "ask_contact_text": "Как с вами связаться? Телефон, email, MAX или Telegram.",
   "ambiguous_handle_question": "Это Telegram или MAX? Уточните, пожалуйста.",
@@ -253,8 +254,8 @@ Uvicorn настраивает только `uvicorn`, `uvicorn.error`, `uvicorn
 1. **`CONTACT_REQUEST_INTENT`** — просит связаться / оставить обращение / предлагает
    сотрудничество. Запускает сбор контакта и отправку.
 2. **`CONTACT_INFO_INTENT`** — спрашивает, как связаться с фондом. Запускает режим
-   `await_contact`: обычный ответ по КБ с контактами фонда + предложение оставить свой контакт;
-   письма нет.
+   `await_contact`: детерминированный блок контактов фонда + предложение оставить свой контакт;
+   письма нет. Domain-роутер не должен подменять это вопросом «в каком вы городе?».
 
 Триггеры должны быть узкими: «свяжитесь» без «со мной» — ещё не обращение, а совет.
 
@@ -300,8 +301,8 @@ CONTACT_INFO_INTENT = re.compile(
 - `CONTACT_REQUEST_INTENT` + контакт → отправка (direct-ответ);
 - `CONTACT_REQUEST_INTENT` без контакта → вопрос о канале;
 - только `CONTACT_INFO_INTENT` → `await_contact`: ответ по КБ + предложение, без письма;
-- `CONTACT_INFO_INTENT` + контакт в той же реплике → обычный ответ по КБ с контактами фонда
-  (`mode=offer`) **и** отправка; подтверждение добавляется суффиксом к ответу.
+- `CONTACT_INFO_INTENT` + контакт в той же реплике → детерминированный блок контактов фонда
+  **и** отправка; подтверждение добавляется к ответу после tool.
 
 Негативные примеры (не должны запускать отправку):
 
@@ -337,7 +338,7 @@ CONTACT_INFO_INTENT = re.compile(
 
 | Шаг | Что делает | Ответ пользователю |
 |---|---|---|
-| `await_contact` | Обычный ответ по КБ (контакты фонда) уже сформирован; добавляет предложение оставить контакт | «Если удобнее, оставьте свой телефон, email, MAX или Telegram — передам специалисту.» |
+| `await_contact` | Детерминированный блок контактов фонда + предложение оставить контакт; RAG/domain не вызываются | «С фондом можно связаться: …» + «Если удобнее, оставьте свой телефон, email, MAX или Telegram — передам специалисту.» |
 | `collect_contacts` | Мержит новые контакты в слоты, проверяет наличие хотя бы одного канала | «Как с вами связаться? Телефон, email, MAX или Telegram.» |
 | `confirm` | Показывает распознанные контакты | «Передать в фонд: Анна, +7…? Ответьте „да“ или исправьте.» |
 | `send` | Резюме LLM + письмо + вложение | **«Наш специалист свяжется с вами в ближайшее время.»** |
@@ -669,8 +670,9 @@ class WorkflowTurn:
     run_id: int | None = None
     action: PendingAction | None = None
     finished: bool = False
-    mode: str = "direct"         # direct | offer (обычный ответ + answer_suffix)
-    answer_suffix: str = ""      # для mode=offer: предложение оставить контакт
+    mode: str = "direct"         # direct | offer (offer оставлен для будущих асинхронных сценариев)
+    answer_suffix: str = ""      # для mode=offer
+    append_action_message: bool = False  # добавить подтверждение к уже готовому ответу
 
 def plan_workflow_turn(
     *,
@@ -1158,11 +1160,11 @@ curl -sS http://127.0.0.1:8000/v1/chat \
 |---|---|
 | `packages/platform/store.py` | таблицы `skill_runs`, `contact_requests`; датаклассы и методы; сид уважает `enabled` |
 | `packages/skills/contacts.py` | `ContactSlots`, телефон/email/MAX/Telegram, `@username` → уточнение, kind, cancel/confirm |
-| `packages/skills/workflow.py` | intent-триггеры, `await_contact` / `collect_contacts` / `confirm` / `send`, TTL, `mode=offer` |
+| `packages/skills/workflow.py` | intent-триггеры, детерминированный блок контактов, `await_contact` / `collect_contacts` / `confirm` / `send`, TTL |
 | `packages/skills/contact_request.py` | резюме LLM + fallback, транскрипт txt, тело письма, `send_contact_request_tool` |
 | `packages/skills/tools.py` | реестр tools и проверка `allowed_tools` |
 | `packages/integrations/mailtrap/client.py` | `MailAttachment`, `reply_to`, вложения для SMTP/Mailtrap, INFO-лог успеха |
-| `apps/api/app/api/routes/chat.py` | workflow до domain-роутинга, action до ответа, `answer_suffix` в non-stream/stream |
+| `apps/api/app/api/routes/chat.py` | workflow до domain-роутинга, action до ответа, блок контактов и `answer_suffix` в non-stream/stream |
 | `apps/api/app/logging_config.py`, `main.py` | INFO-логи приложения видны в `docker compose logs api` |
 | `packages/skills/seeds.py` | сид `contact-request` (enabled, конфиг, examples) |
 | `.env.example` | `LOG_LEVEL`, `CONTACT_REQUEST_ENABLED`, `CONTACT_REQUEST_LOG_CONTACTS` |

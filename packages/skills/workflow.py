@@ -34,6 +34,12 @@ OFFER_TEXT = (
 ASK_CONTACT_TEXT = "Как с вами связаться? Телефон, email, MAX или Telegram."
 AMBIGUOUS_HANDLE_TEXT = "Это Telegram или MAX? Уточните, пожалуйста."
 CANCEL_TEXT = "Хорошо, ничего не отправляю."
+CONTACT_INFO_TEXT = (
+    "С фондом можно связаться:\n"
+    "- Почта: info@fondparkinson.ru\n"
+    "- Сайт: https://fondparkinson.ru/\n"
+    "- Telegram: https://t.me/fondparkinson"
+)
 
 _CONTACT_VERB = r"(?:связ|свяж|перезвон|позвон)\w*"
 _CONTACT_SELF = r"(?:со\s+мной|мне|с\s+нами|нас)"
@@ -87,6 +93,7 @@ class WorkflowTurn:
     finished: bool = False
     mode: str = "direct"  # direct | offer
     answer_suffix: str = ""
+    append_action_message: bool = False
     extra: dict[str, Any] = field(default_factory=dict)
 
 
@@ -176,6 +183,8 @@ def _send_turn(
     slots: ContactSlots,
     run: SkillRun,
     mode: str,
+    base_answer: str = "",
+    append_action_message: bool = False,
 ) -> WorkflowTurn:
     store.save_skill_run(tenant_id, run.id, step="send", slots=slots.to_dict())
     confirmation = _text(skill, "confirmation_text", CONFIRMATION_TEXT)
@@ -186,14 +195,19 @@ def _send_turn(
         "slots": slots.to_dict(),
         "confirmation": confirmation,
     }
+    if base_answer:
+        answer = base_answer
+    else:
+        answer = "" if mode == "offer" else confirmation
     return WorkflowTurn(
-        answer="" if mode == "offer" else confirmation,
+        answer=answer,
         step="send",
         slots=slots,
         run_id=run.id,
         action=PendingAction(tool="send_contact_request", payload=payload),
         mode=mode,
         answer_suffix=confirmation if mode == "offer" else "",
+        append_action_message=append_action_message,
         extra={"request_id": request_id},
     )
 
@@ -309,6 +323,56 @@ def _confirm_turn(
     return WorkflowTurn(answer=answer, step="confirm", slots=slots, run_id=run.id)
 
 
+def _info_turn(
+    *,
+    store: PlatformStore,
+    tenant_id: int,
+    skill: Skill,
+    slots: ContactSlots,
+    run: SkillRun,
+    require_confirm: bool = False,
+) -> WorkflowTurn:
+    """Answer "how to contact" deterministically, then offer to pass a contact.
+
+    Domain routing must not replace this with "в каком вы городе?" just because
+    ``find-doctor`` matched the word "связаться".
+    """
+    block = _text(skill, "contact_info_text", CONTACT_INFO_TEXT)
+    if slots.has_contact:
+        if require_confirm:
+            confirmed = _confirm_turn(
+                store=store, tenant_id=tenant_id, skill=skill, slots=slots, run=run
+            )
+            return replace(confirmed, answer=f"{block}\n\n{confirmed.answer}")
+        return _send_turn(
+            store=store,
+            tenant_id=tenant_id,
+            skill=skill,
+            slots=slots,
+            run=run,
+            mode="direct",
+            base_answer=block,
+            append_action_message=True,
+        )
+    if slots.handle:
+        _save(store, tenant_id, run, step="await_contact", slots=slots)
+        question = _text(skill, "ambiguous_handle_question", AMBIGUOUS_HANDLE_TEXT)
+        return WorkflowTurn(
+            answer=f"{block}\n\n{question}",
+            step="await_contact",
+            slots=slots,
+            run_id=run.id,
+        )
+    _save(store, tenant_id, run, step="await_contact", slots=slots)
+    offer = _text(skill, "offer_text", OFFER_TEXT)
+    return WorkflowTurn(
+        answer=f"{block}\n\n{offer}",
+        step="await_contact",
+        slots=slots,
+        run_id=run.id,
+    )
+
+
 def _looks_like_contact_answer(question: str) -> bool:
     text = " ".join(question.strip().split())
     return len(text) <= 40 and "?" not in text
@@ -362,18 +426,26 @@ def plan_workflow_turn(
 
         if run.step == "await_contact":
             if slots.has_contact:
+                if info_intent:
+                    return _info_turn(
+                        store=store,
+                        tenant_id=tenant_id,
+                        skill=skill,
+                        slots=slots,
+                        run=run,
+                        require_confirm=require_confirm,
+                    )
                 return _send_turn(store=store, tenant_id=tenant_id, skill=skill, slots=slots, run=run, mode="direct")
             if slots.handle:
+                if info_intent:
+                    return _info_turn(
+                        store=store, tenant_id=tenant_id, skill=skill, slots=slots, run=run
+                    )
                 _save(store, tenant_id, run, slots=slots)
                 return _ambiguous_turn(skill=skill, slots=slots, run=run, step="await_contact")
             if info_intent:
-                return _offer_turn(
-                    store=store,
-                    tenant_id=tenant_id,
-                    skill=skill,
-                    slots=slots,
-                    run=run,
-                    action=run.action,
+                return _info_turn(
+                    store=store, tenant_id=tenant_id, skill=skill, slots=slots, run=run
                 )
             if request_intent:
                 _save(store, tenant_id, run, slots=slots)
@@ -386,23 +458,32 @@ def plan_workflow_turn(
 
         if run.step == "collect_contacts":
             if slots.has_contact:
+                if info_intent:
+                    return _info_turn(
+                        store=store,
+                        tenant_id=tenant_id,
+                        skill=skill,
+                        slots=slots,
+                        run=run,
+                        require_confirm=require_confirm,
+                    )
                 if require_confirm:
                     return _confirm_turn(
                         store=store, tenant_id=tenant_id, skill=skill, slots=slots, run=run
                     )
                 return _send_turn(store=store, tenant_id=tenant_id, skill=skill, slots=slots, run=run, mode="direct")
             if slots.handle:
+                if info_intent:
+                    return _info_turn(
+                        store=store, tenant_id=tenant_id, skill=skill, slots=slots, run=run
+                    )
                 _save(store, tenant_id, run, slots=slots)
                 return _ambiguous_turn(
                     skill=skill, slots=slots, run=run, step="collect_contacts"
                 )
             if info_intent:
-                return _offer_turn(
-                    store=store,
-                    tenant_id=tenant_id,
-                    skill=skill,
-                    slots=slots,
-                    run=run,
+                return _info_turn(
+                    store=store, tenant_id=tenant_id, skill=skill, slots=slots, run=run
                 )
             if new_slots.name or new_slots.organization or _looks_like_contact_answer(question):
                 _save(store, tenant_id, run, slots=slots)
@@ -411,6 +492,15 @@ def plan_workflow_turn(
             return None
 
         if run.step == "confirm":
+            if info_intent:
+                return _info_turn(
+                    store=store,
+                    tenant_id=tenant_id,
+                    skill=skill,
+                    slots=slots,
+                    run=run,
+                    require_confirm=require_confirm,
+                )
             if is_confirm(question, confirm_phrases):
                 return _send_turn(store=store, tenant_id=tenant_id, skill=skill, slots=slots, run=run, mode="direct")
             if new_slots.has_contact:
@@ -436,57 +526,46 @@ def plan_workflow_turn(
         return None
 
     if info_intent and not request_intent:
-        if new_slots.has_contact:
-            if require_confirm:
-                run = _start(store, tenant_id, session_id, skill, "confirm", new_slots)
-                confirmed = _confirm_turn(
-                    store=store, tenant_id=tenant_id, skill=skill, slots=new_slots, run=run
-                )
-                return replace(confirmed, mode="offer", answer="", answer_suffix=confirmed.answer)
-            run = _start(store, tenant_id, session_id, skill, "send", new_slots)
-            return _send_turn(store=store, tenant_id=tenant_id, skill=skill, slots=new_slots, run=run, mode="offer")
-        if new_slots.handle:
-            run = _start(store, tenant_id, session_id, skill, "await_contact", new_slots)
-            turn = _ambiguous_turn(
-                skill=skill, slots=new_slots, run=run, step="await_contact"
-            )
-            return replace(turn, mode="offer", answer="", answer_suffix=turn.answer)
-        run = _start(store, tenant_id, session_id, skill, "await_contact", new_slots)
-        return _offer_turn(
+        step = "send" if new_slots.has_contact else "await_contact"
+        run = _start(store, tenant_id, session_id, skill, step, new_slots)
+        return _info_turn(
             store=store,
             tenant_id=tenant_id,
             skill=skill,
             slots=new_slots,
             run=run,
+            require_confirm=require_confirm,
         )
 
     # Explicit contact request.
     if new_slots.has_contact:
+        if info_intent:
+            run = _start(store, tenant_id, session_id, skill, "send", new_slots)
+            return _info_turn(
+                store=store,
+                tenant_id=tenant_id,
+                skill=skill,
+                slots=new_slots,
+                run=run,
+                require_confirm=require_confirm,
+            )
         if require_confirm:
             run = _start(store, tenant_id, session_id, skill, "confirm", new_slots)
-            confirmed = _confirm_turn(
+            return _confirm_turn(
                 store=store, tenant_id=tenant_id, skill=skill, slots=new_slots, run=run
             )
-            if info_intent:
-                return replace(confirmed, mode="offer", answer="", answer_suffix=confirmed.answer)
-            return confirmed
         run = _start(store, tenant_id, session_id, skill, "send", new_slots)
-        mode = "offer" if info_intent else "direct"
-        return _send_turn(store=store, tenant_id=tenant_id, skill=skill, slots=new_slots, run=run, mode=mode)
+        return _send_turn(store=store, tenant_id=tenant_id, skill=skill, slots=new_slots, run=run, mode="direct")
     if new_slots.handle:
         run = _start(store, tenant_id, session_id, skill, "collect_contacts", new_slots)
-        turn = _ambiguous_turn(skill=skill, slots=new_slots, run=run, step="collect_contacts")
         if info_intent:
-            return replace(turn, mode="offer", answer="", answer_suffix=turn.answer)
-        return turn
+            return _info_turn(
+                store=store, tenant_id=tenant_id, skill=skill, slots=new_slots, run=run
+            )
+        return _ambiguous_turn(skill=skill, slots=new_slots, run=run, step="collect_contacts")
     run = _start(store, tenant_id, session_id, skill, "collect_contacts", new_slots)
     if info_intent:
-        return _offer_turn(
-            store=store,
-            tenant_id=tenant_id,
-            skill=skill,
-            slots=new_slots,
-            run=run,
-            suffix=_text(skill, "ask_contact_text", ASK_CONTACT_TEXT),
+        return _info_turn(
+            store=store, tenant_id=tenant_id, skill=skill, slots=new_slots, run=run
         )
     return _ask_turn(skill=skill, slots=new_slots, run=run)
