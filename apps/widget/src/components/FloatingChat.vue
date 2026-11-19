@@ -303,7 +303,7 @@ function applyPanelRect(width: number, height: number) {
 
 function toggleMaxSize() {
   if (isMaximized.value) {
-    applyPanelRect(INITIAL_WIDTH, INITIAL_HEIGHT)
+    placeInitially()
     return
   }
   const { maxWidth, maxHeight } = viewportLimits()
