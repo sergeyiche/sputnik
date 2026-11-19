@@ -39,6 +39,9 @@ class MailtrapMailer:
         transport: str = "mailtrap",
         smtp_host: str = "",
         smtp_port: int = 1025,
+        smtp_username: str = "",
+        smtp_password: str = "",
+        smtp_security: str = "none",
     ) -> None:
         self._api_key = api_key.strip()
         self._sender_email = sender_email.strip()
@@ -48,6 +51,10 @@ class MailtrapMailer:
         self._transport = transport.strip().lower()
         self._smtp_host = smtp_host.strip()
         self._smtp_port = smtp_port
+        self._smtp_username = smtp_username.strip()
+        self._smtp_password = smtp_password
+        security = smtp_security.strip().lower()
+        self._smtp_security = security if security in {"none", "starttls", "ssl"} else "none"
 
     @property
     def transport(self) -> str:
@@ -60,6 +67,8 @@ class MailtrapMailer:
         if not self._sender_email:
             return False
         if self._transport == "smtp":
+            if self._smtp_username and not self._smtp_password:
+                return False
             return bool(self._smtp_host)
         if self._transport != "mailtrap" or not self._api_key:
             return False
@@ -150,7 +159,15 @@ class MailtrapMailer:
                     subtype=subtype or "octet-stream",
                     filename=item.filename,
                 )
-        with smtplib.SMTP(self._smtp_host, self._smtp_port, timeout=10) as smtp:
+        if self._smtp_security == "ssl":
+            smtp_client = smtplib.SMTP_SSL(self._smtp_host, self._smtp_port, timeout=10)
+        else:
+            smtp_client = smtplib.SMTP(self._smtp_host, self._smtp_port, timeout=10)
+        with smtp_client as smtp:
+            if self._smtp_security == "starttls":
+                smtp.starttls()
+            if self._smtp_username:
+                smtp.login(self._smtp_username, self._smtp_password)
             smtp.send_message(message)
 
     def _send_mailtrap(

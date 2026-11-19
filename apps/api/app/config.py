@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     mail_transport: str = "smtp"
     smtp_host: str = "127.0.0.1"
     smtp_port: int = 1025
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_security: str = "none"  # none | starttls | ssl
     mailtrap_api_key: str = ""
     mailtrap_use_sandbox: bool = True
     mailtrap_inbox_id: str = ""

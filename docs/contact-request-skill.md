@@ -1177,7 +1177,7 @@ curl -sS http://127.0.0.1:8000/v1/chat \
 - `tests/unit/test_contact_request_api.py` — HTTP-сценарии с fake RAG и mailer.
 - `tests/unit/test_mailer_attachments.py` — SMTP-вложение и `Reply-To`.
 
-Полный `pytest tests/unit`: **212 passed**.
+Полный `pytest tests/unit`: **213 passed**.
 
 ### 11.3. Проверка локально
 
@@ -1194,7 +1194,15 @@ curl -sS http://127.0.0.1:8000/v1/chat \
 - Для тенанта: выключить навык `contact-request` в админке.
 - Уже созданные `skill_runs`/`contact_requests` остаются в БД для аудита.
 
-### 11.5. Что осталось (P1)
+### 11.5. SMTP для Yandex Cloud Postbox
+
+`MailtrapMailer` поддерживает внешний SMTP с авторизацией и TLS:
+`SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_SECURITY=none|starttls|ssl`. Для Postbox
+ожидаемо `SMTP_SECURITY=ssl`, порт 465; точные host/логин/пароль — из консоли Postbox.
+При настройке на сервере нужно перекрыть `SMTP_HOST: mailcatcher` в compose (например,
+через `docker-compose.override.yml` или `SMTP_HOST: ${SMTP_HOST:-mailcatcher}`).
+
+### 11.6. Что осталось (P1)
 
 Админ-эндпоинт/вкладка `contact-requests`, outbox/retry при сбое SMTP, threadpool для отправки,
 `notifications_email` вместо email владельца, `allow_domain_aside`, `done`-payload с workflow,

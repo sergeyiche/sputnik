@@ -358,6 +358,9 @@ def get_mailer() -> MailtrapMailer:
             transport=settings.mail_transport,
             smtp_host=settings.smtp_host,
             smtp_port=settings.smtp_port,
+            smtp_username=settings.smtp_username,
+            smtp_password=settings.smtp_password,
+            smtp_security=settings.smtp_security,
         )
     return _mailer
 
