@@ -50,7 +50,7 @@ git push prod main        # ← запускает деплой
 ```bash
 ssh root@spootnik.online 'tail -n 40 /var/log/sputnik-deploy.log'
 ssh root@spootnik.online 'docker compose -f /opt/oracool/docker-compose.yml --profile frontend ps'
-curl -fsS https://spootnik.online/health
+ssh root@spootnik.online 'curl -fsS http://127.0.0.1:8000/health'
 ```
 
 Идёт ли деплой прямо сейчас:
