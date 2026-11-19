@@ -33,6 +33,31 @@ def extract_docx(path: Path) -> str:
     return "\n\n".join(paragraphs)
 
 
+def extract_doc(path: Path) -> str:
+    """Extract text from a Word 97–2003 .doc file.
+
+    Some uploads keep a .doc name but are OOXML; those go through the docx extractor.
+    """
+    data = path.read_bytes()
+    if data.startswith(b"PK"):
+        return extract_docx(path)
+
+    try:
+        from legacy_doc import LegacyDocError, extract_text
+    except ImportError as exc:
+        raise ConversionError("legacy-doc is not installed") from exc
+
+    try:
+        text = extract_text(data).text
+    except LegacyDocError as exc:
+        raise ConversionError(f"Cannot extract text from DOC: {path.name}: {exc}") from exc
+
+    text = (text or "").strip()
+    if not text:
+        raise ConversionError(f"No extractable text in DOC: {path}")
+    return text
+
+
 def extract_pdf(path: Path) -> str:
     try:
         from pypdf import PdfReader
@@ -104,6 +129,7 @@ def extract_xlsx(path: Path) -> str:
 EXTRACTORS = {
     ".txt": extract_txt,
     ".md": extract_md,
+    ".doc": extract_doc,
     ".docx": extract_docx,
     ".pdf": extract_pdf,
     ".xlsx": extract_xlsx,

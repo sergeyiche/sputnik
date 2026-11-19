@@ -26,7 +26,7 @@ def service(tmp_path: Path) -> KnowledgeFilesService:
 
     (sources / "Сон.txt").write_text("Про сон", encoding="utf-8")
     (sources / "Навигатор.md").write_text("# Навигатор", encoding="utf-8")
-    (sources / "Старый.doc").write_bytes(b"legacy")
+    (sources / "Старый.rtf").write_bytes(b"legacy")
     (sources / "README.md").write_text("служебный", encoding="utf-8")
 
     renamed = knowledge / "Проекты фонда.txt"
@@ -44,11 +44,11 @@ def _by_name(items, name):
 
 def test_list_sources_statuses(service: KnowledgeFilesService) -> None:
     items = service.list_sources()
-    assert [i.name for i in items] == ["Навигатор.md", "Сон.txt", "Старый.doc"]
+    assert [i.name for i in items] == ["Навигатор.md", "Сон.txt", "Старый.rtf"]
     assert _by_name(items, "Сон.txt").conversion_status == "not_converted"
     assert _by_name(items, "Навигатор.md").conversion_status == "outdated"
     assert _by_name(items, "Навигатор.md").document == "Проекты фонда.txt"
-    assert _by_name(items, "Старый.doc").conversion_status == "unsupported"
+    assert _by_name(items, "Старый.rtf").conversion_status == "unsupported"
 
 
 def test_convert_overwrites_renamed_document(service: KnowledgeFilesService, tmp_path: Path) -> None:
@@ -68,7 +68,7 @@ def test_convert_pending_skips_up_to_date(service: KnowledgeFilesService) -> Non
 
 def test_convert_unsupported_format(service: KnowledgeFilesService) -> None:
     with pytest.raises(InvalidFileError):
-        service.convert_source("Старый.doc")
+        service.convert_source("Старый.rtf")
 
 
 def test_upload_validation(service: KnowledgeFilesService) -> None:

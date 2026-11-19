@@ -5,10 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from docx import Document
 from openpyxl import Workbook
 
 from packages.etl.convert import convert_paths
-from packages.etl.converters import ConversionError, extract_xlsx
+from packages.etl.converters import ConversionError, extract_doc, extract_xlsx
 
 
 def test_extract_xlsx_reads_rows(tmp_path: Path) -> None:
@@ -36,6 +37,41 @@ def test_extract_xlsx_empty_raises(tmp_path: Path) -> None:
     wb.save(path)
     with pytest.raises(ConversionError, match="No extractable text"):
         extract_xlsx(path)
+
+
+FIXTURE_DOC = Path(__file__).resolve().parents[1] / "fixtures" / "sample.doc"
+
+
+def test_extract_doc_reads_legacy_word(tmp_path: Path) -> None:
+    text = extract_doc(FIXTURE_DOC)
+    assert "Артикуляция" in text
+    assert "Наклон головы направо." in text
+
+    sources = tmp_path / "sources"
+    sources.mkdir()
+    output = tmp_path / "out"
+    target = sources / "упражнения.doc"
+    target.write_bytes(FIXTURE_DOC.read_bytes())
+    results = convert_paths([target], output, sources_dir=sources, force=True)
+    assert results[0].status == "created"
+    body = results[0].output.read_text(encoding="utf-8")
+    assert "source-format: doc" in body
+    assert "Артикуляция" in body
+
+
+def test_extract_doc_accepts_docx_bytes(tmp_path: Path) -> None:
+    path = tmp_path / "renamed.doc"
+    document = Document()
+    document.add_paragraph("Текст из docx")
+    document.save(path)
+    assert "Текст из docx" in extract_doc(path)
+
+
+def test_extract_doc_rejects_garbage(tmp_path: Path) -> None:
+    path = tmp_path / "broken.doc"
+    path.write_bytes(b"legacy")
+    with pytest.raises(ConversionError, match="Cannot extract text"):
+        extract_doc(path)
 
 
 def test_convert_paths_single_file(tmp_path: Path) -> None:

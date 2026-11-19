@@ -1,4 +1,4 @@
-"""Convert raw knowledge sources (pdf, docx, xlsx, txt, md) to normalized .txt files."""
+"""Convert raw knowledge sources (pdf, doc, docx, xlsx, txt, md) to normalized .txt files."""
 
 from __future__ import annotations
 
@@ -199,7 +199,7 @@ def main() -> None:
     parser.add_argument(
         "paths",
         nargs="*",
-        help="Optional file path(s) to convert (pdf, docx, xlsx, txt, md)",
+        help="Optional file path(s) to convert (pdf, doc, docx, xlsx, txt, md)",
     )
     parser.add_argument(
         "--sources",
