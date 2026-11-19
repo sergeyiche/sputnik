@@ -53,6 +53,12 @@ ssh root@spootnik.online 'docker compose -f /opt/oracool/docker-compose.yml --pr
 curl -fsS https://spootnik.online/health
 ```
 
+Идёт ли деплой прямо сейчас:
+
+```bash
+ssh root@spootnik.online 'flock -n /var/lock/sputnik-deploy.lock true && echo idle || echo running'
+```
+
 Скрипт сам ждёт `http://127.0.0.1:8000/health` (до 3 минут) и отдачу
 `/widget/sputnik.js`; при ошибке печатает `docker compose ps` и логи
 контейнера и завершается с кодом 1.
