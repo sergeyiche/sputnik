@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     mailtrap_use_sandbox: bool = True
     mailtrap_inbox_id: str = ""
     mailtrap_sender_email: str = "noreply@spootnik.online"
-    mailtrap_sender_name: str = "Спутник"
+    mailtrap_sender_name: str = "ИИ-Ассистент Спутник"
     password_reset_ttl_minutes: int = 60
 
     @property

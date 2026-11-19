@@ -27,7 +27,7 @@ def test_smtp_sends_attachment_and_reply_to(monkeypatch: pytest.MonkeyPatch) -> 
     sender = MailtrapMailer(
         api_key="",
         sender_email="noreply@spootnik.ru",
-        sender_name="Спутник",
+        sender_name="ИИ-Ассистент Спутник",
         use_sandbox=True,
         inbox_id="",
         transport="smtp",
@@ -47,6 +47,7 @@ def test_smtp_sends_attachment_and_reply_to(monkeypatch: pytest.MonkeyPatch) -> 
     message = captured["message"]
     assert message["To"] == "info@fondparkinson.ru"
     assert message["Reply-To"] == "user@example.org"
+    assert "ИИ-Ассистент Спутник" in message["From"]
     parts = list(message.iter_parts())
     assert parts[0].get_content_type() == "text/plain"
     attachment = next(part for part in parts if part.get_filename())
@@ -79,7 +80,7 @@ def test_smtp_ssl_and_login(monkeypatch: pytest.MonkeyPatch) -> None:
     sender = MailtrapMailer(
         api_key="",
         sender_email="noreply@spootnik.ru",
-        sender_name="Спутник",
+        sender_name="ИИ-Ассистент Спутник",
         use_sandbox=True,
         inbox_id="",
         transport="smtp",

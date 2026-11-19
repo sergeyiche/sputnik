@@ -45,7 +45,7 @@ class MailtrapMailer:
     ) -> None:
         self._api_key = api_key.strip()
         self._sender_email = sender_email.strip()
-        self._sender_name = sender_name.strip() or "Спутник"
+        self._sender_name = sender_name.strip() or "ИИ-Ассистент Спутник"
         self._use_sandbox = use_sandbox
         self._inbox_id = inbox_id.strip()
         self._transport = transport.strip().lower()
