@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import { useChat, type ChatMessage, type ChatSource } from '../composables/useChat'
@@ -207,6 +207,244 @@ async function scrollToBottom() {
 watch(messages, scrollToBottom, { deep: true })
 
 const hasMessages = computed(() => messages.value.length > 0)
+
+const SCREEN_GAP = 16
+const INITIAL_WIDTH = 400
+const INITIAL_HEIGHT = 560
+const MAX_WIDTH = 800
+const MAX_HEIGHT = 600
+const MIN_WIDTH = 280
+const MIN_HEIGHT = 320
+
+const RESIZE_EDGES = ['n', 'e', 's', 'w', 'ne', 'nw', 'se', 'sw'] as const
+type ResizeEdge = (typeof RESIZE_EDGES)[number]
+
+const panelWidth = ref(INITIAL_WIDTH)
+const panelHeight = ref(INITIAL_HEIGHT)
+const panelX = ref(SCREEN_GAP)
+const panelY = ref(SCREEN_GAP)
+const dragging = ref(false)
+const viewportTick = ref(0)
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value))
+}
+
+function viewportLimits() {
+  viewportTick.value
+  const availableWidth = Math.max(160, window.innerWidth - SCREEN_GAP * 2)
+  const availableHeight = Math.max(160, window.innerHeight - SCREEN_GAP * 2)
+  const maxWidth = Math.min(MAX_WIDTH, availableWidth)
+  const maxHeight = Math.min(MAX_HEIGHT, availableHeight)
+  return {
+    minWidth: Math.min(MIN_WIDTH, maxWidth),
+    minHeight: Math.min(MIN_HEIGHT, maxHeight),
+    maxWidth,
+    maxHeight,
+  }
+}
+
+function clampSize(width: number, height: number) {
+  const limits = viewportLimits()
+  return {
+    width: Math.round(clamp(width, limits.minWidth, limits.maxWidth)),
+    height: Math.round(clamp(height, limits.minHeight, limits.maxHeight)),
+  }
+}
+
+function clampPosition(x: number, y: number, width: number, height: number) {
+  const maxX = Math.max(SCREEN_GAP, window.innerWidth - width - SCREEN_GAP)
+  const maxY = Math.max(SCREEN_GAP, window.innerHeight - height - SCREEN_GAP)
+  return {
+    x: Math.round(clamp(x, SCREEN_GAP, maxX)),
+    y: Math.round(clamp(y, SCREEN_GAP, maxY)),
+  }
+}
+
+function placeInitially() {
+  const size = clampSize(INITIAL_WIDTH, INITIAL_HEIGHT)
+  panelWidth.value = size.width
+  panelHeight.value = size.height
+  const offset = window.innerWidth <= 480 ? 12 : 24
+  const pos = clampPosition(
+    window.innerWidth - offset - size.width,
+    window.innerHeight - offset - size.height,
+    size.width,
+    size.height,
+  )
+  panelX.value = pos.x
+  panelY.value = pos.y
+}
+
+const panelStyle = computed(() => ({
+  left: `${panelX.value}px`,
+  top: `${panelY.value}px`,
+  width: `${panelWidth.value}px`,
+  height: `${panelHeight.value}px`,
+}))
+
+const isMaximized = computed(() => {
+  const { maxWidth, maxHeight } = viewportLimits()
+  return panelWidth.value === maxWidth && panelHeight.value === maxHeight
+})
+
+const sizeToggleLabel = computed(() =>
+  isMaximized.value ? 'Исходный размер' : 'На максимальный размер',
+)
+
+function applyPanelRect(width: number, height: number) {
+  const size = clampSize(width, height)
+  const pos = clampPosition(panelX.value, panelY.value, size.width, size.height)
+  panelWidth.value = size.width
+  panelHeight.value = size.height
+  panelX.value = pos.x
+  panelY.value = pos.y
+}
+
+function toggleMaxSize() {
+  if (isMaximized.value) {
+    applyPanelRect(INITIAL_WIDTH, INITIAL_HEIGHT)
+    return
+  }
+  const { maxWidth, maxHeight } = viewportLimits()
+  applyPanelRect(maxWidth, maxHeight)
+}
+
+function onViewportResize() {
+  viewportTick.value += 1
+  applyPanelRect(panelWidth.value, panelHeight.value)
+}
+
+function edgeSides(edge: ResizeEdge) {
+  return {
+    north: edge.includes('n'),
+    south: edge.includes('s'),
+    east: edge.includes('e'),
+    west: edge.includes('w'),
+  }
+}
+
+function onHeaderPointerDown(event: PointerEvent) {
+  if (event.button !== 0) return
+  const target = event.target as HTMLElement | null
+  if (target?.closest('button, a, input, textarea')) return
+  const handle = event.currentTarget as HTMLElement
+  const offsetX = event.clientX - panelX.value
+  const offsetY = event.clientY - panelY.value
+  dragging.value = true
+  try {
+    handle.setPointerCapture(event.pointerId)
+  } catch {
+    /* the pointer may already be gone */
+  }
+  const onMove = (ev: PointerEvent) => {
+    const pos = clampPosition(
+      ev.clientX - offsetX,
+      ev.clientY - offsetY,
+      panelWidth.value,
+      panelHeight.value,
+    )
+    panelX.value = pos.x
+    panelY.value = pos.y
+  }
+  const onUp = () => {
+    dragging.value = false
+    handle.removeEventListener('pointermove', onMove)
+    handle.removeEventListener('pointerup', onUp)
+    handle.removeEventListener('pointercancel', onUp)
+  }
+  handle.addEventListener('pointermove', onMove)
+  handle.addEventListener('pointerup', onUp)
+  handle.addEventListener('pointercancel', onUp)
+}
+
+function onResizePointerDown(event: PointerEvent, edge: ResizeEdge) {
+  if (event.button !== 0) return
+  event.stopPropagation()
+  const handle = event.currentTarget as HTMLElement
+  const origin = {
+    x: event.clientX,
+    y: event.clientY,
+    left: panelX.value,
+    top: panelY.value,
+    right: panelX.value + panelWidth.value,
+    bottom: panelY.value + panelHeight.value,
+  }
+  const sides = edgeSides(edge)
+  dragging.value = true
+  try {
+    handle.setPointerCapture(event.pointerId)
+  } catch {
+    /* the pointer may already be gone */
+  }
+  const onMove = (ev: PointerEvent) => {
+    const dx = ev.clientX - origin.x
+    const dy = ev.clientY - origin.y
+    const limits = viewportLimits()
+    let left = sides.west ? origin.left + dx : origin.left
+    let top = sides.north ? origin.top + dy : origin.top
+    let right = sides.east ? origin.right + dx : origin.right
+    let bottom = sides.south ? origin.bottom + dy : origin.bottom
+    const viewRight = window.innerWidth - SCREEN_GAP
+    const viewBottom = window.innerHeight - SCREEN_GAP
+    left = clamp(left, SCREEN_GAP, viewRight)
+    top = clamp(top, SCREEN_GAP, viewBottom)
+    right = clamp(right, SCREEN_GAP, viewRight)
+    bottom = clamp(bottom, SCREEN_GAP, viewBottom)
+
+    let width = right - left
+    let height = bottom - top
+    if (width > limits.maxWidth) {
+      width = limits.maxWidth
+      if (sides.west) left = right - width
+      else right = left + width
+    } else if (width < limits.minWidth) {
+      width = limits.minWidth
+      if (sides.west) left = right - width
+      else right = left + width
+    }
+    if (height > limits.maxHeight) {
+      height = limits.maxHeight
+      if (sides.north) top = bottom - height
+      else bottom = top + height
+    } else if (height < limits.minHeight) {
+      height = limits.minHeight
+      if (sides.north) top = bottom - height
+      else bottom = top + height
+    }
+    if (left < SCREEN_GAP) left = SCREEN_GAP
+    if (top < SCREEN_GAP) top = SCREEN_GAP
+    if (left + width > viewRight) left = Math.max(SCREEN_GAP, viewRight - width)
+    if (top + height > viewBottom) top = Math.max(SCREEN_GAP, viewBottom - height)
+
+    panelX.value = Math.round(left)
+    panelY.value = Math.round(top)
+    panelWidth.value = Math.round(width)
+    panelHeight.value = Math.round(height)
+  }
+  const onUp = () => {
+    dragging.value = false
+    handle.removeEventListener('pointermove', onMove)
+    handle.removeEventListener('pointerup', onUp)
+    handle.removeEventListener('pointercancel', onUp)
+  }
+  handle.addEventListener('pointermove', onMove)
+  handle.addEventListener('pointerup', onUp)
+  handle.addEventListener('pointercancel', onUp)
+}
+
+if (typeof window !== 'undefined') {
+  placeInitially()
+}
+
+onMounted(() => {
+  window.addEventListener('resize', onViewportResize)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', onViewportResize)
+  window.removeEventListener('keydown', onGlobalKeydown)
+})
 </script>
 
 <template>
@@ -225,8 +463,23 @@ const hasMessages = computed(() => messages.value.length > 0)
       </svg>
     </button>
 
-    <div v-else class="pcw-panel" role="dialog" aria-label="Чат ассистента">
-      <header class="pcw-header">
+    <div
+      v-else
+      class="pcw-panel"
+      :class="{ 'is-dragging': dragging }"
+      :style="panelStyle"
+      role="dialog"
+      aria-label="Чат ассистента"
+    >
+      <div
+        v-for="edge in RESIZE_EDGES"
+        :key="edge"
+        class="pcw-resize"
+        :class="`pcw-resize--${edge}`"
+        @pointerdown="onResizePointerDown($event, edge)"
+      />
+      <div class="pcw-frame">
+      <header class="pcw-header" @pointerdown="onHeaderPointerDown" @dragstart.prevent>
         <div class="pcw-heading">
           <h2 class="pcw-title">{{ heading }}</h2>
           <p v-if="subtitle" class="pcw-subtitle">{{ subtitle }}</p>
@@ -240,6 +493,35 @@ const hasMessages = computed(() => messages.value.length > 0)
             @click="clearChat"
           >
             ↺
+          </button>
+          <button
+            class="pcw-icon-btn"
+            type="button"
+            :title="sizeToggleLabel"
+            :aria-label="sizeToggleLabel"
+            :aria-pressed="isMaximized"
+            @click="toggleMaxSize"
+          >
+            <svg v-if="isMaximized" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+              <path
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                d="M9 9H4v11h11v-5M15 15h5V4H9v5"
+              />
+            </svg>
+            <svg v-else viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+              <path
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"
+              />
+            </svg>
           </button>
           <button class="pcw-icon-btn" type="button" title="Закрыть" aria-label="Закрыть" @click="toggle">
             <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
@@ -395,6 +677,7 @@ const hasMessages = computed(() => messages.value.length > 0)
           <template v-else>Отправить</template>
         </button>
       </footer>
+      </div>
     </div>
   </div>
 </template>
@@ -436,9 +719,15 @@ const hasMessages = computed(() => messages.value.length > 0)
 }
 
 .pcw-panel {
+  position: fixed;
+  z-index: 9999;
+  padding: 0;
+}
+
+.pcw-frame {
   position: relative;
-  width: min(400px, calc(100vw - 32px));
-  height: min(560px, calc(100vh - 48px));
+  width: 100%;
+  height: 100%;
   background: var(--pcw-brand);
   border-radius: 16px;
   box-shadow: 0 8px 40px rgba(0, 0, 0, 0.18);
@@ -446,7 +735,88 @@ const hasMessages = computed(() => messages.value.length > 0)
   flex-direction: column;
   align-items: stretch;
   overflow: hidden;
-  padding: 0;
+}
+
+.pcw-resize {
+  position: absolute;
+  z-index: 4;
+  touch-action: none;
+}
+
+.pcw-resize--n,
+.pcw-resize--s {
+  left: 14px;
+  right: 14px;
+  height: 8px;
+  cursor: ns-resize;
+}
+
+.pcw-resize--n {
+  top: -4px;
+}
+
+.pcw-resize--s {
+  bottom: -4px;
+}
+
+.pcw-resize--e,
+.pcw-resize--w {
+  top: 14px;
+  bottom: 14px;
+  width: 8px;
+  cursor: ew-resize;
+}
+
+.pcw-resize--e {
+  right: -4px;
+}
+
+.pcw-resize--w {
+  left: -4px;
+}
+
+.pcw-resize--ne,
+.pcw-resize--nw,
+.pcw-resize--se,
+.pcw-resize--sw {
+  width: 14px;
+  height: 14px;
+}
+
+.pcw-resize--ne {
+  top: -4px;
+  right: -4px;
+  cursor: nesw-resize;
+}
+
+.pcw-resize--nw {
+  top: -4px;
+  left: -4px;
+  cursor: nwse-resize;
+}
+
+.pcw-resize--se {
+  right: -4px;
+  bottom: -4px;
+  cursor: nwse-resize;
+}
+
+.pcw-resize--sw {
+  left: -4px;
+  bottom: -4px;
+  cursor: nesw-resize;
+}
+
+.pcw-resize--se::after {
+  content: '';
+  position: absolute;
+  right: 5px;
+  bottom: 5px;
+  width: 7px;
+  height: 7px;
+  border-right: 2px solid #94a3b8;
+  border-bottom: 2px solid #94a3b8;
+  pointer-events: none;
 }
 
 .pcw-header {
@@ -463,6 +833,17 @@ const hasMessages = computed(() => messages.value.length > 0)
   gap: 8px;
   flex-shrink: 0;
   border-radius: 0;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.pcw-panel.is-dragging .pcw-header {
+  cursor: grabbing;
+}
+
+.pcw-panel.is-dragging .pcw-frame {
+  user-select: none;
 }
 
 .pcw-heading {
@@ -914,10 +1295,6 @@ const hasMessages = computed(() => messages.value.length > 0)
     bottom: 12px;
     right: 12px;
     left: 12px;
-  }
-
-  .pcw-panel {
-    width: 100%;
   }
 }
 </style>
