@@ -1,0 +1,33 @@
+#!/bin/sh
+# Auto-deploy refs/heads/main pushed to /opt/git/sputnik.git.
+#
+# Install on the server:
+#   install -m 755 /opt/oracool/deploy/post-receive /opt/git/sputnik.git/hooks/post-receive
+#
+# The deploy runs detached so the push returns immediately; progress goes to
+# /var/log/sputnik-deploy.log.
+set -eu
+
+SCRIPT=/opt/oracool/scripts/deploy.sh
+LOG=/var/log/sputnik-deploy.log
+
+should_deploy=0
+while read -r old new ref; do
+  [ "$ref" = "refs/heads/main" ] || continue
+  if [ "$new" = "0000000000000000000000000000000000000000" ]; then
+    continue
+  fi
+  should_deploy=1
+done
+
+[ "$should_deploy" -eq 1 ] || exit 0
+
+if [ ! -x "$SCRIPT" ]; then
+  printf '%s deploy script missing or not executable: %s\n' \
+    "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$SCRIPT" >>"$LOG"
+  exit 1
+fi
+
+nohup "$SCRIPT" >>"$LOG" 2>&1 </dev/null &
+printf '%s deploy started: %s (pid %s)\n' \
+  "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$new" "$!" >>"$LOG"
