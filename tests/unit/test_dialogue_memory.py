@@ -50,3 +50,11 @@ def test_memory_upsert_and_list(tmp_path: Path) -> None:
     assert len(items) == 1
     assert items[0].value == "Олег Петров"
     assert store.list_memories(sid, tenant_id=2) == []
+
+
+def test_pronoun_is_not_saved_as_a_city() -> None:
+    facts = extract_facts_rules(
+        "нет возможности обратиться к специалисту. может быть есть книги "
+        "или информация из них"
+    )
+    assert all(key != "city" for key, _, _ in facts)

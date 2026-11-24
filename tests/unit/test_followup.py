@@ -186,3 +186,8 @@ def test_short_city_answer_is_glued_to_the_pending_topic() -> None:
     )
     assert query == "Есть ли список врачей?\nКраснодар"
     assert topic == "Есть ли список врачей?"
+
+
+def test_maybe_be_question_stays_in_topic() -> None:
+    assert is_followup("может быть сдать какие то анализы")
+    assert not is_followup("Какие анализы сдать при СБН?")

@@ -319,3 +319,146 @@ def test_city_answer_respects_skill_max_rows(tmp_path: Path) -> None:
     assert adjustment.direct_answer
     assert adjustment.direct_answer.count("- **") == 2
     assert "показаны первые 2" in adjustment.direct_answer
+
+
+def test_region_alias_maps_adygea_to_maykop(tmp_path: Path) -> None:
+    path = tmp_path / "Список врачей паркинсонологов.txt"
+    path.write_text(
+        "ФИО\tКонтакт\tГород\tЦентр\tСпециализация\n"
+        "Хатхе Юлия Анатольевна\t+7 918 000-00-00\tМайкоп\tГиппократ\tПаркинсонолог\n",
+        encoding="utf-8",
+    )
+    skill = _find_doctor(
+        config={
+            "clarify": {
+                "slot": "city",
+                "source": "Список врачей паркинсонологов.txt",
+                "sources": ["Список врачей паркинсонологов.txt"],
+                "region_aliases": {"республика адыгея": "Майкоп", "адыгея": "Майкоп"},
+            },
+            "max_rows": 10,
+        }
+    )
+    adjustment = plan_turn(
+        [MatchedSkill(skill=skill, score=0.9)],
+        question="Есть ли специалист из Республики Адыгея?",
+        knowledge_dir=tmp_path,
+    )
+    assert adjustment.city == "Майкоп"
+    assert adjustment.direct_answer
+    assert "Хатхе" in adjustment.direct_answer
+
+
+def test_doctor_source_picks_the_fullest_list(tmp_path: Path) -> None:
+    old = tmp_path / "Список врачей.txt"
+    old.write_text(
+        "ФИО\tКонтакт\tГород\tЦентр\tСпециализация\n"
+        "Иванов Иван Иванович\t+7 900 000-00-00\tКраснодар\tКлиника А\tНевролог\n",
+        encoding="utf-8",
+    )
+    full = tmp_path / "Список врачей паркинсонологов.txt"
+    full.write_text(
+        "ФИО\tКонтакт\tГород\tЦентр\tСпециализация\n"
+        "Иванов Иван Иванович\t+7 900 000-00-00\tКраснодар\tКлиника А\tНевролог\n"
+        "Хатхе Юлия Анатольевна\t+7 918 000-00-00\tКраснодар\tПроментальное\tПаркинсонолог\n"
+        "Хатхе Юлия Анатольевна\t+7 918 000-00-00\tМайкоп\tГиппократ\tПаркинсонолог\n",
+        encoding="utf-8",
+    )
+    skill = _find_doctor(
+        config={
+            "clarify": {
+                "slot": "city",
+                "source": "Список врачей.txt",
+                "sources": ["Список врачей.txt", "Список врачей паркинсонологов.txt"],
+            },
+            "max_rows": 10,
+        }
+    )
+    adjustment = plan_turn(
+        [MatchedSkill(skill=skill, score=0.9)],
+        question="Какие врачи есть в Краснодаре?",
+        knowledge_dir=tmp_path,
+    )
+    assert adjustment.direct_answer
+    assert "Хатхе" in adjustment.direct_answer
+    assert adjustment.exact_chunks[0].source == "Список врачей паркинсонологов.txt"
+
+
+def test_project_lookup_returns_all_navigator_projects(tmp_path: Path) -> None:
+    path = _navigator_file(tmp_path)
+    path.write_text(
+        path.read_text(encoding="utf-8")
+        + "\n1.8. Стратегия развития 2026–2027\nСправочный раздел.\n",
+        encoding="utf-8",
+    )
+    skill = _find_doctor(
+        config={
+            "lookup": {
+                "source": "Навигатор по проектам фонда.txt",
+                "all_terms": ["все проекты", "какие проекты"],
+                "all_exclude": ["Стратегия"],
+                "items": [],
+            }
+        }
+    )
+    skill = replace(skill, name="fund-projects")
+    adjustment = plan_turn(
+        [MatchedSkill(skill=skill, score=0.9)],
+        question="Расскажи про все проекты фонда",
+        knowledge_dir=tmp_path,
+    )
+    assert adjustment.direct_answer
+    for title in ("Игры Паркинсона", "Команда Мечты", "ДО-ФА-МИ"):
+        assert title in adjustment.direct_answer
+    assert "Стратегия" not in adjustment.direct_answer
+
+
+def test_dbs_and_fus_lists_are_complete(tmp_path: Path) -> None:
+    path = tmp_path / "какие операции при БП.txt"
+    path.write_text(
+        "В России операцию по DBS делают в клиниках:\n"
+        "1) Москва. Центр А\n"
+        "Адрес: Москва, ул. А, д. 1\n"
+        "2) Санкт-Петербург. Центр Б\n"
+        "Адрес: СПб, ул. Б, д. 2\n"
+        "Операция ФУЗ (фокусированный ультразвук)\n"
+        "В России операцию ФУЗ делают в клиниках:\n"
+        "1) Уфа. Центр В\n"
+        "Адрес: Уфа, ул. В, д. 3\n"
+        "Операция — Инфузия интестинального геля\n",
+        encoding="utf-8",
+    )
+    skill = _find_doctor(
+        config={
+            "list_lookup": {
+                "source": "какие операции при БП.txt",
+                "sections": [
+                    {
+                        "title": "DBS",
+                        "terms": ["dbs"],
+                        "start": "В России операцию по DBS",
+                        "end": "Операция ФУЗ",
+                        "limit": 10,
+                    },
+                    {
+                        "title": "FUS",
+                        "terms": ["fus", "фуз"],
+                        "start": "В России операцию ФУЗ",
+                        "end": "Операция — Инфузия",
+                        "limit": 3,
+                    },
+                ],
+            }
+        }
+    )
+    skill = replace(skill, name="dbs")
+    adjustment = plan_turn(
+        [MatchedSkill(skill=skill, score=0.9)],
+        question="Где делают DBS и FUS?",
+        knowledge_dir=tmp_path,
+    )
+    assert adjustment.direct_answer
+    assert "Центр А" in adjustment.direct_answer
+    assert "Центр Б" in adjustment.direct_answer
+    assert "Центр В" in adjustment.direct_answer
+    assert adjustment.direct_answer.count("1)") == 2

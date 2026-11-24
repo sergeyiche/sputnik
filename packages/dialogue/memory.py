@@ -25,9 +25,24 @@ _NAME = re.compile(
     re.IGNORECASE,
 )
 _CITY = re.compile(
-    r"(?:живу\s+в(?:\s+городе)?|я\s+из(?:\s+города)?|город\s*[—\-:]?)\s+([A-Za-zА-Яа-яЁё\- ]{2,40})",
+    r"(?:живу\s+в(?:\s+городе)?|(?<![А-Яа-яЁё])я\s+из(?:\s+города)?|город\s*[—\-:]?)\s+"
+    r"([A-Za-zА-Яа-яЁё\- ]{2,40})",
     re.IGNORECASE,
 )
+_CITY_STOPWORDS = {
+    "них",
+    "него",
+    "нее",
+    "неё",
+    "меня",
+    "тебя",
+    "вас",
+    "нас",
+    "себя",
+    "это",
+    "там",
+    "тут",
+}
 _MEDS = re.compile(
     r"(?:принимаю|пью|на\s+препарате)\s+([A-Za-zА-Яа-яЁё0-9\-]{3,40})"
     r"(?=\s*(?:\.|,|$|утром|вечером|днём|днем|ночью|каждый|по|\s+и\s))",
@@ -91,7 +106,9 @@ def extract_facts_rules(user_text: str) -> list[tuple[str, str, float]]:
 
     match = _CITY.search(text)
     if match:
-        found.append(("city", _clean(match.group(1)), 0.85))
+        city = _clean(match.group(1))
+        if city.casefold() not in _CITY_STOPWORDS and len(city) >= 3:
+            found.append(("city", city, 0.85))
 
     match = _MEDS.search(text)
     if match:

@@ -17,7 +17,8 @@ _ANAPHORA = re.compile(
 )
 _FOLLOWUP_PHRASES = re.compile(
     r"^\s*(?:расскажи(?:те)?\s+подробнее|продолжи(?:те)?|подробнее|"
-    r"и\s+что\s+дальше|что\s+(?:ещё|еще)\s+делать)\b",
+    r"и\s+что\s+дальше|что\s+(?:ещё|еще)\s+делать|"
+    r"может\s+быть|а\s+может)\b",
     re.IGNORECASE,
 )
 _STANDALONE_START = re.compile(

@@ -30,7 +30,12 @@ DEFAULT_CITY_NOT_FOUND = (
     "В списке фонда пока нет врачей из города {city}. "
     "Подскажите другой город — я посмотрю, кто есть рядом."
 )
-DEFAULT_CITY_SOURCE = "Список врачей.txt"
+DEFAULT_CITY_SOURCE = "Список врачей паркинсонологов.txt"
+DEFAULT_CITY_SOURCES = (
+    "Список врачей паркинсонологов.txt",
+    "Список врачей с сайта.txt",
+    "Список врачей.txt",
+)
 DEFAULT_CITY_ROWS = 30
 
 # Used only for the built-in find-doctor skill when an existing tenant row has
@@ -39,6 +44,12 @@ DEFAULT_FIND_DOCTOR_CLARIFY = {
     "slot": "city",
     "question": DEFAULT_CITY_QUESTION,
     "source": DEFAULT_CITY_SOURCE,
+    "sources": list(DEFAULT_CITY_SOURCES),
+    "region_aliases": {
+        "республика адыгея": "Майкоп",
+        "адыгея": "Майкоп",
+        "краснодарский край": "Краснодар",
+    },
 }
 
 _CITY_ENDINGS = (
@@ -100,6 +111,9 @@ _rows_cache: dict[tuple[str, int], tuple["DirectoryRow", ...]] = {}
 _sections_cache: dict[tuple[str, int], tuple["DocumentSection", ...]] = {}
 _SECTION_HEADING = re.compile(r"^\s*((?:\d+\.)+\d+)\.\s+(.+?)\s*$")
 _SECTION_PAYMENT_MARKERS = ("оплата — перевод", "tbank.ru", "промокод")
+_NUMBERED_ENTRY = re.compile(
+    r"(?ms)^\s*(\d+)\)\s*(.*?)(?=^\s*\d+\)|\Z)"
+)
 
 
 @dataclass(frozen=True)
@@ -360,12 +374,22 @@ def _clean_section(text: str) -> str:
     return "\n".join(lines).strip()
 
 
+def _project_summary(section: DocumentSection, limit: int = 220) -> str:
+    body = _clean_section(section.text)
+    if not body:
+        return ""
+    line = " ".join(body.split())
+    if len(line) > limit:
+        line = line[:limit].rsplit(" ", 1)[0].rstrip() + "…"
+    return line
+
+
 def project_lookup(
     skill: Skill,
     question: str,
     knowledge_dir: Path | None,
 ) -> TurnAdjustment | None:
-    """Return a deterministic answer for a named fund project."""
+    """Return a deterministic answer for a fund project or the full project menu."""
     config = skill.config if isinstance(skill.config, dict) else {}
     lookup = config.get("lookup")
     if not isinstance(lookup, dict):
@@ -379,6 +403,52 @@ def project_lookup(
     if not sections:
         return None
     lowered = question.casefold()
+
+    all_terms = [
+        str(term).strip()
+        for term in lookup.get("all_terms") or []
+        if str(term).strip()
+    ]
+    if all_terms and any(_term_present(term, lowered) for term in all_terms):
+        excluded = {
+            str(value).casefold()
+            for value in lookup.get("all_exclude") or []
+            if str(value).strip()
+        }
+        selected = [
+            section
+            for section in sections
+            if re.match(r"^1\.", section.title)
+            and not any(marker in section.title.casefold() for marker in excluded)
+        ]
+        if selected:
+            summary_limit = int(lookup.get("all_summary_chars") or 220)
+            lines = ["В навигаторе фонда перечислены такие проекты:", ""]
+            for section in selected:
+                title = section.title.split(". ", 1)[-1]
+                summary = _project_summary(section, summary_limit)
+                lines.append(f"- **{title}**" + (f" — {summary}" if summary else ""))
+            lines.extend(
+                [
+                    "",
+                    "Подробнее о каждом проекте — на официальном сайте фонда "
+                    "или в навигаторе по проектам.",
+                ]
+            )
+            answer = "\n".join(lines)
+            return TurnAdjustment(
+                direct_answer=answer,
+                exact_chunks=(
+                    RetrievedChunk(
+                        content=answer,
+                        source=Path(source).name,
+                        score=None,
+                        metadata={"lookup": "project-all", "projects": len(selected)},
+                    ),
+                ),
+                skill=skill.name,
+            )
+
     for item in items:
         if not isinstance(item, dict):
             continue
@@ -415,6 +485,100 @@ def project_lookup(
             )
     return None
 
+
+def _text_range(text: str, start: str, end: str) -> str:
+    lowered = text.casefold()
+    begin = lowered.find(start.casefold()) if start else 0
+    if begin < 0:
+        begin = 0
+    finish = lowered.find(end.casefold(), begin + 1) if end else -1
+    if finish < 0:
+        finish = len(text)
+    return text[begin:finish].strip()
+
+
+def _numbered_entries(text: str) -> list[str]:
+    entries: list[str] = []
+    for match in _NUMBERED_ENTRY.finditer(text):
+        body = " ".join(match.group(2).split()).strip(" ;")
+        if body:
+            entries.append(f"{match.group(1)}) {body}")
+    return entries
+
+
+def list_lookup(
+    skill: Skill,
+    question: str,
+    knowledge_dir: Path | None,
+) -> TurnAdjustment | None:
+    """Return all numbered entries from a configured KB range.
+
+    Used for DBS/FUS centres where a partial top-k answer is unacceptable.
+    """
+    config = skill.config if isinstance(skill.config, dict) else {}
+    spec = config.get("list_lookup")
+    if not isinstance(spec, dict):
+        return None
+    source = str(spec.get("source") or "").strip()
+    raw_sections = spec.get("sections")
+    if not source or not isinstance(raw_sections, list):
+        return None
+    path = _source_path(knowledge_dir, source)
+    if path is None:
+        return None
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    lowered = question.casefold()
+    selected: list[dict] = []
+    for raw in raw_sections:
+        if not isinstance(raw, dict):
+            continue
+        terms = [str(term) for term in raw.get("terms") or [] if str(term).strip()]
+        if terms and any(_term_present(term, lowered) for term in terms):
+            selected.append(raw)
+    if not selected:
+        all_terms = [
+            str(term) for term in spec.get("all_terms") or [] if str(term).strip()
+        ]
+        if all_terms and any(_term_present(term, lowered) for term in all_terms):
+            selected = [raw for raw in raw_sections if isinstance(raw, dict)]
+    if not selected:
+        return None
+    blocks: list[str] = []
+    chunk_parts: list[str] = []
+    for raw in selected:
+        title = str(raw.get("title") or "Список").strip()
+        start = str(raw.get("start") or "").strip()
+        end = str(raw.get("end") or "").strip()
+        limit = max(1, min(int(raw.get("limit") or 20), 40))
+        ranged = _text_range(text, start, end)
+        entries = _numbered_entries(ranged)[:limit]
+        body = "\n".join(entries) if entries else ranged[:4000]
+        body = sanitize_context_text(body).strip()
+        if not body:
+            continue
+        blocks.append(f"### {title}\n\n{body}")
+        chunk_parts.append(f"{title}:\n{body}")
+    if not blocks:
+        return None
+    answer = (
+        "\n\n".join(blocks)
+        + "\n\nИнформация может обновляться — уточняйте в клинике."
+    )
+    return TurnAdjustment(
+        direct_answer=answer,
+        exact_chunks=(
+            RetrievedChunk(
+                content="\n\n".join(chunk_parts),
+                source=Path(source).name,
+                score=None,
+                metadata={"lookup": "list"},
+            ),
+        ),
+        skill=skill.name,
+    )
 
 def city_context_chunks(
     rows: list[DirectoryRow],
@@ -521,6 +685,58 @@ def _source_path(knowledge_dir: Path | None, source: str | None) -> Path | None:
     return candidate
 
 
+def _region_city(
+    question: str,
+    cities: list[str],
+    aliases: dict | None,
+) -> str | None:
+    if not aliases or not isinstance(aliases, dict):
+        return None
+    lowered = question.casefold().replace("ё", "е")
+    for alias, target in sorted(
+        aliases.items(), key=lambda item: len(str(item[0])), reverse=True
+    ):
+        phrase = str(alias).casefold().replace("ё", "е").strip()
+        if phrase and phrase in lowered:
+            return canonical_city(str(target), cities) or str(target)
+    return None
+
+
+def _doctor_directory(
+    knowledge_dir: Path | None,
+    config: dict,
+) -> tuple[str, Path, list["DirectoryRow"], list[str]] | None:
+    """Pick the most complete available doctor list.
+
+    Admins may keep several exports for a while. The old list is not allowed to
+    shadow a newer, fuller one; once duplicates are removed the first remaining
+    candidate still works.
+    """
+    names: list[str] = []
+    raw_sources = config.get("sources")
+    if isinstance(raw_sources, list):
+        names.extend(str(item).strip() for item in raw_sources if str(item).strip())
+    source = str(config.get("source") or "").strip()
+    if source:
+        names.append(source)
+    names.extend(DEFAULT_CITY_SOURCES)
+    names = list(dict.fromkeys(names))
+    best: tuple[str, Path, list[DirectoryRow], list[str]] | None = None
+    fallback: tuple[str, Path, list[DirectoryRow], list[str]] | None = None
+    for name in names:
+        path = _source_path(knowledge_dir, name)
+        if path is None or not path.is_file():
+            continue
+        rows = load_rows(path)
+        cities = load_cities(path)
+        item = (path.name, path, rows, cities)
+        if fallback is None:
+            fallback = item
+        if rows and (best is None or len(rows) > len(best[2])):
+            best = item
+    return best or fallback
+
+
 def plan_turn(
     matched: list[MatchedSkill],
     *,
@@ -529,12 +745,15 @@ def plan_turn(
     knowledge_dir: Path | None = None,
     context: str = "",
 ) -> TurnAdjustment:
-    """Ask for a missing slot, or provide exact city-filtered context."""
+    """Ask for a missing slot, or provide exact city/list/project context."""
     memory = memory or {}
     for item in matched:
         lookup = project_lookup(item.skill, question, knowledge_dir)
         if lookup is not None:
             return lookup
+        list_result = list_lookup(item.skill, question, knowledge_dir)
+        if list_result is not None:
+            return list_result
         config = clarification_config(item.skill)
         if config is None:
             continue
@@ -549,11 +768,19 @@ def plan_turn(
                     return TurnAdjustment()
             elif item.skill.name == "find-doctor" and not _DOCTOR_INTENT.search(haystack):
                 return TurnAdjustment()
-        source = str(config.get("source") or DEFAULT_CITY_SOURCE)
-        path = _source_path(knowledge_dir, source)
-        rows = load_rows(path)
-        cities = load_cities(path)
-        city = extract_city(question, cities)
+        directory = _doctor_directory(knowledge_dir, config)
+        if directory is None:
+            return TurnAdjustment()
+        source_name, _path, rows, cities = directory
+        city = _region_city(question, cities, config.get("region_aliases"))
+        if city is None:
+            city = extract_city(question, cities)
+        if city is None:
+            city = _region_city(
+                str(memory.get("city") or ""),
+                cities,
+                config.get("region_aliases"),
+            )
         if city is None:
             city = canonical_city(memory.get("city"), cities)
         if city is None and _looks_like_city_answer(question):
@@ -565,15 +792,13 @@ def plan_turn(
                 clarification=str(config.get("question") or DEFAULT_CITY_QUESTION),
                 skill=item.skill.name,
             )
-        # A directory is available: answer from exact rows, not semantic top-k.
-        # This prevents doctors from other cities being labelled with the user's city.
         if rows:
             skill_config = item.skill.config if isinstance(item.skill.config, dict) else {}
             limit = int(skill_config.get("max_rows") or config.get("max_rows") or DEFAULT_CITY_ROWS)
             chunks = city_context_chunks(
                 rows,
                 city,
-                source=source,
+                source=source_name,
                 limit=limit,
             )
             if not chunks:

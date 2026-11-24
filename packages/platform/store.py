@@ -1122,7 +1122,7 @@ class PlatformStore:
             if want_suggestions and not cfg.get("suggestions"):
                 cfg["suggestions"] = list(want_suggestions)
                 config_changed = True
-            want_clarify = want_config.get("clarify")
+            want_clarify = want_config.get("clarify") or {}
             if want_clarify and not cfg.get("clarify"):
                 cfg["clarify"] = want_clarify
                 config_changed = True
@@ -1137,6 +1137,14 @@ class PlatformStore:
                 cfg["match_any"] = list(want_match_any or [])
                 cfg["avoid_any"] = list(want_config.get("avoid_any") or [])
                 cfg["max_rows"] = int(want_config.get("max_rows") or 10)
+                current_clarify = cfg.get("clarify") if isinstance(cfg.get("clarify"), dict) else {}
+                merged_clarify = dict(current_clarify)
+                for key in ("source", "sources", "region_aliases"):
+                    if key in want_clarify:
+                        merged_clarify[key] = want_clarify[key]
+                cfg["clarify"] = merged_clarify
+                if current.retrieval_boost != list(raw.get("retrieval_boost") or []):
+                    patch["retrieval_boost"] = list(raw.get("retrieval_boost") or [])
                 config_changed = True
             # P0 migration for fund-projects: no proactive donation chip and
             # no donation-heavy "О фонде" boost.
@@ -1145,6 +1153,12 @@ class PlatformStore:
                     patch["body"] = raw["body"]
             if raw["name"] == "fund-projects":
                 cfg["match_any"] = list(want_config.get("match_any") or [])
+                cfg["lookup"] = want_config.get("lookup") or {}
+                cfg["retrieval_boost_limit"] = int(
+                    want_config.get("retrieval_boost_limit") or 4
+                )
+                if current.retrieval_boost != list(raw.get("retrieval_boost") or []):
+                    patch["retrieval_boost"] = list(raw.get("retrieval_boost") or [])
                 config_changed = True
                 old_donation = "Как поддержать фонд пожертвованием?"
                 if old_donation in (cfg.get("suggestions") or []):

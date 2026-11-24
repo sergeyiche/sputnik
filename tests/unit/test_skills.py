@@ -202,7 +202,7 @@ def test_seed_upgrades_old_find_doctor_with_city_clarify(tmp_path: Path) -> None
     store.seed_parkinson_skills(fund.id)
     upgraded = store.get_skill(fund.id, doctor.id)
     assert "Спроси, из какого он города" in upgraded.body
-    assert upgraded.config["clarify"]["source"] == "Список врачей.txt"
+    assert upgraded.config["clarify"]["source"] == "Список врачей паркинсонологов.txt"
     assert upgraded.config["match_any"]
     assert upgraded.config["avoid_any"]
     assert upgraded.config["max_rows"] == 10
