@@ -10,7 +10,7 @@ def test_long_answer_prompt_requires_depth_and_followup() -> None:
     assert "Первый абзац" in text
     assert "Второй абзац" in text
     assert "Третий абзац" in text
-    assert "В большинстве содержательных ответов" in text
+    assert "вопрос в конце обязателен" in text
     assert "один уместный вопрос" in text
     assert "не копируй дословно" in text.casefold()
     assert "не обещай излечение" in text.casefold()

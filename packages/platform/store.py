@@ -1167,6 +1167,9 @@ class PlatformStore:
             if raw["name"] == "urinary":
                 if "не называй любое частое мочеиспускание никтурией" not in (current.body or "").casefold():
                     patch["body"] = raw["body"]
+            if raw["name"] == "answer-depth":
+                if "вопрос в конце обязателен" not in (current.body or "").casefold():
+                    patch["body"] = raw["body"]
             if raw["name"] == "fund-projects":
                 cfg["match_any"] = list(want_config.get("match_any") or [])
                 cfg["lookup"] = want_config.get("lookup") or {}
