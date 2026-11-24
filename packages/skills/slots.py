@@ -685,6 +685,42 @@ def _source_path(knowledge_dir: Path | None, source: str | None) -> Path | None:
     return candidate
 
 
+def qa_lookup(
+    skill: Skill,
+    question: str,
+    knowledge_dir: Path | None,
+) -> TurnAdjustment | None:
+    """Return a curated, deterministic answer for a narrow question."""
+    config = skill.config if isinstance(skill.config, dict) else {}
+    items = config.get("qa")
+    if not isinstance(items, list):
+        return None
+    lowered = question.casefold()
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        terms = [str(term) for term in item.get("terms") or [] if str(term).strip()]
+        answer = str(item.get("answer") or "").strip()
+        if not terms or not answer:
+            continue
+        if not any(_term_present(term, lowered) for term in terms):
+            continue
+        source = str(item.get("source") or "").strip()
+        return TurnAdjustment(
+            direct_answer=answer,
+            exact_chunks=(
+                RetrievedChunk(
+                    content=answer,
+                    source=Path(source).name if source else skill.name,
+                    score=None,
+                    metadata={"lookup": "qa"},
+                ),
+            ),
+            skill=skill.name,
+        )
+    return None
+
+
 def _region_city(
     question: str,
     cities: list[str],
@@ -754,6 +790,9 @@ def plan_turn(
         list_result = list_lookup(item.skill, question, knowledge_dir)
         if list_result is not None:
             return list_result
+        qa_result = qa_lookup(item.skill, question, knowledge_dir)
+        if qa_result is not None:
+            return qa_result
         config = clarification_config(item.skill)
         if config is None:
             continue

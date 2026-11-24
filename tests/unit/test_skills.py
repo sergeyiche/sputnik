@@ -309,7 +309,7 @@ def test_legal_social_seed_exists(tmp_path: Path) -> None:
     assert "правовая поддержка БП 2026.txt" in legal.retrieval_boost
     find_doctor = next(skill for skill in store.list_skills(fund.id) if skill.name == "find-doctor")
     assert find_doctor.config["max_rows"] == 10
-    assert "специалист" not in find_doctor.config["match_any"]
+    assert "специалист" in find_doctor.config["match_any"]
     assert "льгот" in find_doctor.config["avoid_any"]
 
 

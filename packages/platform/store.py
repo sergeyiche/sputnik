@@ -1127,7 +1127,14 @@ class PlatformStore:
                 cfg["clarify"] = want_clarify
                 config_changed = True
             want_match_any = want_config.get("match_any")
-            for key in ("retrieval_boost_limit", "match_any", "avoid_any", "max_rows", "lookup"):
+            for key in (
+                "retrieval_boost_limit",
+                "match_any",
+                "avoid_any",
+                "max_rows",
+                "lookup",
+                "qa",
+            ):
                 if key in want_config and key not in cfg:
                     cfg[key] = want_config[key]
                     config_changed = True

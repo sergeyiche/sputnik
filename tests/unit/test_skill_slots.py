@@ -462,3 +462,51 @@ def test_dbs_and_fus_lists_are_complete(tmp_path: Path) -> None:
     assert "Центр Б" in adjustment.direct_answer
     assert "Центр В" in adjustment.direct_answer
     assert adjustment.direct_answer.count("1)") == 2
+
+
+def test_rls_analyses_qa_is_deterministic(tmp_path: Path) -> None:
+    skill = _find_doctor(
+        config={
+            "qa": [
+                {
+                    "terms": ["анализ"],
+                    "source": "СБН.txt",
+                    "answer": "Проверяют ферритин и сывороточное железо.",
+                }
+            ]
+        }
+    )
+    skill = replace(skill, name="rls")
+    adjustment = plan_turn(
+        [MatchedSkill(skill=skill, score=0.9)],
+        question="Какие анализы сдать при СБН?",
+        knowledge_dir=tmp_path,
+    )
+    assert adjustment.direct_answer == "Проверяют ферритин и сывороточное железо."
+    assert adjustment.exact_chunks[0].source == "СБН.txt"
+
+
+def test_doctor_specialist_with_region_alias(tmp_path: Path) -> None:
+    path = tmp_path / "Список врачей паркинсонологов.txt"
+    path.write_text(
+        "ФИО\tКонтакт\tГород\tЦентр\tСпециализация\n"
+        "Хатхе Юлия Анатольевна\t+7 918 000-00-00\tМайкоп\tГиппократ\tПаркинсонолог\n",
+        encoding="utf-8",
+    )
+    skill = _find_doctor(
+        config={
+            "clarify": {
+                "slot": "city",
+                "source": "Список врачей паркинсонологов.txt",
+                "sources": ["Список врачей паркинсонологов.txt"],
+                "region_aliases": {"адыгея": "Майкоп"},
+            }
+        }
+    )
+    adjustment = plan_turn(
+        [MatchedSkill(skill=skill, score=0.9)],
+        question="Есть ли специалист из Республики Адыгея?",
+        knowledge_dir=tmp_path,
+    )
+    assert adjustment.direct_answer
+    assert "Хатхе" in adjustment.direct_answer
