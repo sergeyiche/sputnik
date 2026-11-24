@@ -365,3 +365,15 @@ def test_explicit_intent_does_not_pull_in_semantic_neighbour() -> None:
         revision=2,
     )
     assert [item.skill.name for item in matched] == ["find-doctor"]
+
+
+def test_context_policy_is_appended_after_domain_skill() -> None:
+    from dataclasses import replace
+
+    domain = _skill(id=30, name="medications", title="Лекарства", body="ДОМЕН")
+    context = replace(
+        _skill(id=31, name="answer-depth", title="Глубина", body="КОНТЕКСТ"),
+        skill_type="context",
+    )
+    prompt = merge_skill_instructions("База.", [MatchedSkill(skill=domain, score=0.9), MatchedSkill(skill=context, score=1.0)])
+    assert prompt.index("ДОМЕН") < prompt.index("КОНТЕКСТ")

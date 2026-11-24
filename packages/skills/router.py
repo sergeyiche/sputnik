@@ -278,6 +278,11 @@ def merge_skill_instructions(base_prompt: str, matched: list[MatchedSkill]) -> s
     active = [item for item in matched if item.skill.body.strip()]
     if not active:
         return base_prompt
+    # Context policies go last: they are cross-cutting formatting/dialogue rules
+    # and must not be overridden by a topic skill's short format section.
+    domain = [item for item in active if item.skill.skill_type != "context"]
+    context = [item for item in active if item.skill.skill_type == "context"]
+    active = [*domain, *context]
     blocks = [base_prompt.rstrip(), "", "## Активные навыки", ""]
     for item in active:
         skill = item.skill
