@@ -331,3 +331,37 @@ def test_seed_removes_old_fund_donation_chip_and_boost(tmp_path: Path) -> None:
     assert "О фонде.txt" not in upgraded.retrieval_boost
     assert "Как поддержать фонд пожертвованием?" not in upgraded.config["suggestions"]
     assert "Не выводи «проект недоступен»" in upgraded.body
+
+
+def test_explicit_intent_does_not_pull_in_semantic_neighbour() -> None:
+    from packages.skills.router import SkillRouter
+
+    class SameVectors:
+        def embed_documents(self, texts: list[str]) -> list[list[float]]:
+            return [[1.0, 0.0] for _ in texts]
+
+        def embed_query(self, text: str) -> list[float]:
+            return [1.0, 0.0]
+
+    doctor = _skill(
+        id=21,
+        name="find-doctor",
+        title="Врачи",
+        config={"match_any": ["врач"], "avoid_any": []},
+        examples=(SkillExample(id=21, text="контакты врача"),),
+    )
+    urinary = _skill(
+        id=22,
+        name="urinary",
+        title="Мочеиспускание",
+        config={"match_any": [], "avoid_any": []},
+        examples=(SkillExample(id=22, text="мочеиспускание"),),
+    )
+    router = SkillRouter(SameVectors(), threshold=0.5, max_active=2, margin=0.5)
+    matched = router.match(
+        1,
+        [doctor, urinary],
+        "Республика Адыгея, врач",
+        revision=2,
+    )
+    assert [item.skill.name for item in matched] == ["find-doctor"]

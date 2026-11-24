@@ -195,17 +195,24 @@ class SkillRouter:
         # Explicit intent beats a marginal embedding score. Without this,
         # «Какие врачи есть в Москве?» (≈0.850) falls just below the e5 threshold.
         matched_ids = {item.skill.id for item in scored}
+        explicit_ids: set[int] = set()
         for skill in domain:
-            if skill.id in matched_ids:
-                continue
             if _avoid_any(skill, lowered):
                 continue
             hints = _match_any(skill)
-            if hints and any(hint.casefold() in lowered for hint in hints):
+            if not hints or not any(hint.casefold() in lowered for hint in hints):
+                continue
+            explicit_ids.add(skill.id)
+            if skill.id not in matched_ids:
                 scored.append(MatchedSkill(skill=skill, score=self._threshold, sticky=False))
 
         if not scored:
             return []
+        # A deterministic intent is stronger than a near-threshold semantic
+        # neighbour. Without this, «Республика Адыгея» can pull in urinary
+        # instructions just because e5 scores everything around 0.86.
+        if explicit_ids:
+            scored = [item for item in scored if item.skill.id in explicit_ids]
         best_score = max(item.score for item in scored)
         # Keep only skills close to the best match: a single question should not
         # activate every topic that happens to clear the threshold.

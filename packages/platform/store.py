@@ -1151,6 +1151,9 @@ class PlatformStore:
             if raw["name"] == "legal-social":
                 if "Не используй устаревшие названия ведомств" not in (current.body or ""):
                     patch["body"] = raw["body"]
+            if raw["name"] == "dbs":
+                cfg["avoid_any"] = list(want_config.get("avoid_any") or [])
+                config_changed = True
             if raw["name"] == "fund-projects":
                 cfg["match_any"] = list(want_config.get("match_any") or [])
                 cfg["lookup"] = want_config.get("lookup") or {}
