@@ -22,6 +22,13 @@ from packages.security.disclaimer import MEDICAL_DISCLAIMER, append_disclaimer, 
 
 EMPTY_CONTEXT = "Релевантных фрагментов базы знаний по этому вопросу нет."
 HISTORY_MESSAGES = 8
+ANSWER_DEPTH_SUFFIX = """
+
+Формат ответа для этого вопроса:
+- Дай 2–3 содержательных абзаца связного текста; не заменяй их списком или набором заголовков.
+- В конце задай один уместный вопрос, который продолжает тему и помогает выбрать следующий шаг. Не используй шаблонное «чем ещё помочь?».
+- Не задавай вопрос только в острой ситуации или если человек прямо просит без вопросов.
+"""
 
 
 def _token_usage(response: object) -> tuple[int, int]:
@@ -50,6 +57,10 @@ class RAGResponse:
     tokens_in: int = 0
     tokens_out: int = 0
     skills: list[dict] | None = None
+
+
+def _has_answer_depth(skills: list[dict] | None) -> bool:
+    return any(str(item.get("name") or "") == "answer-depth" for item in (skills or []))
 
 
 class RAGPipeline:
@@ -221,6 +232,7 @@ class RAGPipeline:
         meaning: str = "",
         system_prompt: str | None = None,
         exact_lookup: bool = False,
+        style_suffix: str = "",
     ) -> list[BaseMessage]:
         context = self._format_context(chunks) if chunks else EMPTY_CONTEXT
         system_text = system_prompt if system_prompt is not None else self._prompt_text()
@@ -232,19 +244,20 @@ class RAGPipeline:
                 + "Перечисли всех специалистов из этого списка, включая неврологов "
                 + "и врачей других специализаций; не сокращай его до одних «паркинсонологов».\n"
             )
+        user_text = build_rag_user_message(
+            question,
+            context,
+            cite_sources=self._show_sources,
+            topic=topic,
+            meaning=meaning,
+            exact_lookup=exact_lookup,
+        )
+        if style_suffix:
+            user_text = f"{user_text.rstrip()}\n{style_suffix.strip()}\n"
         return [
             SystemMessage(content=system_text),
             *self._history_messages(history),
-            HumanMessage(
-                content=build_rag_user_message(
-                    question,
-                    context,
-                    cite_sources=self._show_sources,
-                    topic=topic,
-                    meaning=meaning,
-                    exact_lookup=exact_lookup,
-                )
-            ),
+            HumanMessage(content=user_text),
         ]
 
     def query(
@@ -285,6 +298,7 @@ class RAGPipeline:
                 meaning=meaning,
                 system_prompt=system_prompt,
                 exact_lookup=bool(extra_chunks),
+                style_suffix=ANSWER_DEPTH_SUFFIX if _has_answer_depth(skills) else "",
             )
         )
         answer_text = response.content if isinstance(response.content, str) else str(response.content)
@@ -340,6 +354,7 @@ class RAGPipeline:
                 meaning=meaning,
                 system_prompt=system_prompt,
                 exact_lookup=bool(extra_chunks),
+                style_suffix=ANSWER_DEPTH_SUFFIX if _has_answer_depth(skills) else "",
             )
         ):
             if token.content:

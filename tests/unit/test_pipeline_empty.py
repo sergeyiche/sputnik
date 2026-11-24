@@ -89,3 +89,20 @@ def test_boost_can_add_several_chunks_from_one_source() -> None:
         "section 2",
         "section 3",
     ]
+
+
+def test_answer_depth_suffix_is_added_for_parkinson_style(isolated_prompt: None) -> None:
+    llm = _FakeLLM()
+    pipeline = RAGPipeline(llm=llm, vector_store=_EmptyStore())
+    pipeline.query(
+        "Что такое тремор?",
+        skills=[{"name": "answer-depth"}],
+    )
+    assert llm.last_messages is not None
+    assert "2–3 содержательных абзаца" in llm.last_messages[-1].content
+    assert "один уместный вопрос" in llm.last_messages[-1].content
+
+    llm2 = _FakeLLM()
+    RAGPipeline(llm=llm2, vector_store=_EmptyStore()).query("Что такое тремор?")
+    assert llm2.last_messages is not None
+    assert "2–3 содержательных абзаца" not in llm2.last_messages[-1].content
