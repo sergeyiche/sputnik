@@ -24,6 +24,7 @@ def create_llm(*, access_token: str | None = None) -> BaseChatModel:
             "model": os.getenv("GIGACHAT_MODEL", "GigaChat-2"),
             "scope": os.getenv("GIGACHAT_SCOPE", "GIGACHAT_API_PERS"),
             "temperature": float(os.getenv("LLM_TEMPERATURE", "0.3")),
+            "max_tokens": int(os.getenv("LLM_MAX_TOKENS", "1200")),
             "verify_ssl_certs": get_gigachat_verify_ssl_certs(),
             "ca_bundle_file": get_gigachat_ca_bundle_file(),
             "base_url": os.getenv("GIGACHAT_API_BASE_URL", "https://api.giga.chat/v1"),
@@ -49,6 +50,7 @@ def create_llm(*, access_token: str | None = None) -> BaseChatModel:
             api_key=os.getenv("OPENAI_API_KEY"),
             base_url=os.getenv("OPENAI_BASE_URL") or None,
             temperature=float(os.getenv("LLM_TEMPERATURE", "0.3")),
+            max_tokens=int(os.getenv("LLM_MAX_TOKENS", "1200")),
         )
 
     raise ValueError(f"Unknown LLM_PROVIDER: {provider}. Supported: gigachat, openai")

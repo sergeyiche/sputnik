@@ -1180,10 +1180,19 @@ class PlatformStore:
                 if old_donation in (cfg.get("suggestions") or []):
                     cfg["suggestions"] = list(want_suggestions or [])
                     config_changed = True
-                if "Не выводи «проект недоступен»" not in (current.body or ""):
+                if (
+                    "Не выводи «проект недоступен»" not in (current.body or "")
+                    or "Кратко опиши проект" in (current.body or "")
+                ):
                     patch["body"] = raw["body"]
-                if current.retrieval_boost != list(raw.get("retrieval_boost") or []):
-                    patch["retrieval_boost"] = list(raw.get("retrieval_boost") or [])
+            body_markers = {
+                "medications": "Короткие абзацы или список",
+                "exercises": "Нумерованный или маркированный список действий. Коротко.",
+                "legal-social": "Короткий список: право",
+            }
+            marker = body_markers.get(raw["name"])
+            if marker and marker in (current.body or ""):
+                patch["body"] = raw["body"]
             if config_changed:
                 patch["config"] = cfg
             if patch:
