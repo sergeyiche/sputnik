@@ -106,3 +106,24 @@ def test_answer_depth_suffix_is_added_for_parkinson_style(isolated_prompt: None)
     RAGPipeline(llm=llm2, vector_store=_EmptyStore()).query("Что такое тремор?")
     assert llm2.last_messages is not None
     assert "2–3 содержательных абзаца" not in llm2.last_messages[-1].content
+
+
+def test_short_thanks_does_not_get_depth_suffix(isolated_prompt: None) -> None:
+    llm = _FakeLLM()
+    RAGPipeline(llm=llm, vector_store=_EmptyStore()).query(
+        "Спасибо",
+        skills=[{"name": "answer-depth"}],
+    )
+    assert llm.last_messages is not None
+    assert "2–3 содержательных абзаца" not in llm.last_messages[-1].content
+
+
+def test_suicidal_message_gets_emergency_answer_without_llm(isolated_prompt: None) -> None:
+    llm = _FakeLLM()
+    result = RAGPipeline(llm=llm, vector_store=_EmptyStore()).query(
+        "Я больше не могу, не вижу смысла жить",
+        skills=[{"name": "answer-depth"}],
+    )
+    assert llm.calls == 0
+    assert "103" in result.answer
+    assert "112" in result.answer

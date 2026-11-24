@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -18,7 +19,13 @@ from packages.rag.prompts import (
     get_system_prompt,
     strip_trailing_disclaimer,
 )
-from packages.security.disclaimer import MEDICAL_DISCLAIMER, append_disclaimer, is_suspicious_query
+from packages.security.disclaimer import (
+    CRISIS_ANSWER,
+    MEDICAL_DISCLAIMER,
+    append_disclaimer,
+    is_crisis_query,
+    is_suspicious_query,
+)
 
 EMPTY_CONTEXT = "Релевантных фрагментов базы знаний по этому вопросу нет."
 HISTORY_MESSAGES = 8
@@ -61,6 +68,39 @@ class RAGResponse:
 
 def _has_answer_depth(skills: list[dict] | None) -> bool:
     return any(str(item.get("name") or "") == "answer-depth" for item in (skills or []))
+
+
+_SHORT_REPLIES = {
+    "спасибо",
+    "благодарю",
+    "привет",
+    "здравствуйте",
+    "здравствуй",
+    "добрый день",
+    "добрый вечер",
+    "доброе утро",
+    "пока",
+    "до свидания",
+    "да",
+    "нет",
+    "хорошо",
+    "понятно",
+    "ок",
+}
+
+
+def _should_apply_depth(question: str, skills: list[dict] | None) -> bool:
+    if not _has_answer_depth(skills):
+        return False
+    text = " ".join(question.strip().split())
+    if len(re.findall(r"[A-Za-zА-Яа-яЁё]+", text)) < 3:
+        return False
+    normalized = text.casefold().strip(" .,!?;:")
+    if normalized in _SHORT_REPLIES:
+        return False
+    if re.match(r"^(?:привет|здравствуй|добрый|спасибо|благодарю|пока|до свидания)\b", normalized):
+        return False
+    return True
 
 
 class RAGPipeline:
@@ -281,6 +321,13 @@ class RAGPipeline:
                 chunks_used=0,
                 skills=skills or [],
             )
+        if is_crisis_query(question):
+            return RAGResponse(
+                answer=append_disclaimer(CRISIS_ANSWER, self._disclaimer),
+                sources=[],
+                chunks_used=0,
+                skills=skills or [],
+            )
 
         chunks = self._retrieve(
             (search_query or question).strip(),
@@ -298,7 +345,7 @@ class RAGPipeline:
                 meaning=meaning,
                 system_prompt=system_prompt,
                 exact_lookup=bool(extra_chunks),
-                style_suffix=ANSWER_DEPTH_SUFFIX if _has_answer_depth(skills) else "",
+                style_suffix=ANSWER_DEPTH_SUFFIX if _should_apply_depth(question, skills) else "",
             )
         )
         answer_text = response.content if isinstance(response.content, str) else str(response.content)
@@ -336,6 +383,9 @@ class RAGPipeline:
         if is_suspicious_query(question):
             yield append_disclaimer(SUSPICIOUS_ANSWER, self._disclaimer)
             return
+        if is_crisis_query(question):
+            yield append_disclaimer(CRISIS_ANSWER, self._disclaimer)
+            return
 
         chunks = self._retrieve(
             (search_query or question).strip(),
@@ -354,7 +404,7 @@ class RAGPipeline:
                 meaning=meaning,
                 system_prompt=system_prompt,
                 exact_lookup=bool(extra_chunks),
-                style_suffix=ANSWER_DEPTH_SUFFIX if _has_answer_depth(skills) else "",
+                style_suffix=ANSWER_DEPTH_SUFFIX if _should_apply_depth(question, skills) else "",
             )
         ):
             if token.content:
