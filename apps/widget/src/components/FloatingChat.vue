@@ -932,17 +932,23 @@ onUnmounted(() => {
 .pcw-title {
   margin: 0;
   flex: 0 0 auto;
-  font-size: 1.05rem;
+  /* px вместо rem: на сайтах с html { font-size: 62.5% } rem меньше задуманного */
+  font-family: inherit;
+  font-size: 17px;
   font-weight: 600;
+  letter-spacing: normal;
   line-height: 1.25;
+  color: inherit;
 }
 
 .pcw-subtitle {
   margin: 0;
   flex: 1 1 auto;
   min-width: 0;
+  font-family: inherit;
   font-size: 13px;
   font-weight: 400;
+  letter-spacing: normal;
   line-height: 1.35;
   opacity: 0.92;
 }
@@ -957,7 +963,8 @@ onUnmounted(() => {
 .pcw-disclaimer {
   flex: 1;
   margin: 0;
-  font-size: 0.72rem;
+  font-family: inherit;
+  font-size: 12px;
   line-height: 1.35;
   color: #64748b;
 }
@@ -1017,7 +1024,8 @@ onUnmounted(() => {
 .pcw-legal-card__text {
   margin: 0;
   white-space: pre-wrap;
-  font-size: 0.85rem;
+  font-family: inherit;
+  font-size: 14px;
   line-height: 1.45;
   color: #1e293b;
 }
@@ -1057,7 +1065,12 @@ onUnmounted(() => {
 
 .pcw-empty {
   color: #64748b;
-  font-size: 0.95rem;
+  font-family: inherit;
+  font-size: 15px;
+}
+
+.pcw-empty p {
+  margin: 0;
 }
 
 .pcw-suggestions--followup {
@@ -1120,6 +1133,8 @@ onUnmounted(() => {
   color: #1e293b;
   border: 1px solid #e2e8f0;
   border-bottom-left-radius: 4px;
+  font-family: inherit;
+  font-size: 16px;
 }
 
 .pcw-bubble--assistant :deep(p) {
@@ -1138,9 +1153,95 @@ onUnmounted(() => {
 }
 
 .pcw-bubble--assistant :deep(hr ~ *) {
-  font-size: 0.75rem;
+  font-size: 12px;
   line-height: 1.4;
   color: #94a3b8;
+}
+
+/* Защита содержимого ответа от типографики сайта клиента:
+   темы WordPress задают h1-h6, a, ul/ol, blockquote и т.п. глобально. */
+.pcw-answer :deep(h1),
+.pcw-answer :deep(h2),
+.pcw-answer :deep(h3),
+.pcw-answer :deep(h4),
+.pcw-answer :deep(h5),
+.pcw-answer :deep(h6) {
+  font-family: inherit;
+  font-size: 1em;
+  font-weight: 600;
+  letter-spacing: normal;
+  line-height: 1.35;
+  color: inherit;
+  margin: 0.8em 0 0.4em;
+}
+
+.pcw-answer :deep(a) {
+  display: inline;
+  color: var(--pcw-brand-dark);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.pcw-answer :deep(a:hover) {
+  color: var(--pcw-brand);
+}
+
+.pcw-answer :deep(ul),
+.pcw-answer :deep(ol) {
+  margin: 0.5em 0;
+  padding-left: 1.4em;
+}
+
+.pcw-answer :deep(ul) {
+  list-style: disc;
+}
+
+.pcw-answer :deep(ol) {
+  list-style: decimal;
+}
+
+.pcw-answer :deep(li) {
+  margin: 0.25em 0;
+  padding: 0;
+}
+
+.pcw-answer :deep(li > ul),
+.pcw-answer :deep(li > ol) {
+  margin: 0;
+}
+
+.pcw-answer :deep(blockquote) {
+  margin: 0.6em 0;
+  padding: 0.2em 1em;
+  border-left: 3px solid var(--pcw-brand);
+  color: inherit;
+}
+
+.pcw-answer :deep(code) {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.9em;
+  background: var(--pcw-brand-soft);
+  padding: 0.1em 0.3em;
+  border-radius: 4px;
+}
+
+.pcw-answer :deep(pre) {
+  margin: 0.6em 0;
+  white-space: pre-wrap;
+  background: #f1f5f9;
+  padding: 10px 12px;
+  border-radius: 8px;
+}
+
+.pcw-answer :deep(table) {
+  border-collapse: collapse;
+  margin: 0.6em 0;
+}
+
+.pcw-answer :deep(th),
+.pcw-answer :deep(td) {
+  border: 1px solid #e2e8f0;
+  padding: 6px 10px;
 }
 
 .pcw-answer :deep(.pcw-cite) {
@@ -1183,7 +1284,7 @@ onUnmounted(() => {
   border: none;
   color: #64748b;
   font: inherit;
-  font-size: 0.8rem;
+  font-size: 13px;
   cursor: pointer;
 }
 
@@ -1216,7 +1317,7 @@ onUnmounted(() => {
   align-items: flex-start;
   padding: 6px 8px;
   border-radius: 8px;
-  font-size: 0.8rem;
+  font-size: 13px;
   line-height: 1.35;
   transition: background-color 0.3s ease;
 }
@@ -1255,12 +1356,12 @@ onUnmounted(() => {
 
 .pcw-sources__meta {
   color: #94a3b8;
-  font-size: 0.72rem;
+  font-size: 12px;
 }
 
 .pcw-error {
   color: #b91c1c;
-  font-size: 0.85rem;
+  font-size: 14px;
   margin: 8px 0 0;
 }
 
@@ -1280,7 +1381,11 @@ onUnmounted(() => {
   padding: 10px 12px;
   resize: none;
   font-family: inherit;
-  font-size: 1rem;
+  font-size: 16px;
+  line-height: 1.4;
+  color: #1e293b;
+  background: #fff;
+  overflow: auto;
 }
 
 .pcw-input:focus {
