@@ -204,9 +204,11 @@ export interface WidgetSettings {
   greeting: string
   disclaimer: string
   legal_notes: string
+  position: string
   logo_url: string
   origin: string
   snippet: string
+  open_button_snippet: string
 }
 
 async function platformRequest<T>(path: string, init: RequestInit = {}): Promise<T> {

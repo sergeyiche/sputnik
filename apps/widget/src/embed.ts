@@ -3,6 +3,7 @@
  *
  * Usage:
  *   <link rel="stylesheet" href="https://mycompany.spootnik.ru/widget/sputnik.css" />
+ *   <link rel="stylesheet" href="https://mycompany.spootnik.ru/v1/widget/theme.css" />
  *   <script src="https://mycompany.spootnik.ru/widget/sputnik.js" defer></script>
  *   <sputnik-widget></sputnik-widget>
  */
@@ -32,10 +33,35 @@ const scriptOrigin = (() => {
   return ''
 })()
 
+let mountedInstances = 0
+let pendingOpen = false
+
+/** Открыть окно виджета из внешней кнопки на сайте. */
+function openWidget(): void {
+  if (mountedInstances > 0) {
+    window.dispatchEvent(new CustomEvent('sputnik-open'))
+  } else {
+    pendingOpen = true
+  }
+}
+
+// Событие `sputnik-open` диспатчится и напрямую; пока виджет не смонтирован,
+// запоминаем его и воспроизводим после mount, чтобы клик по внешней кнопке
+// не терялся из-за порядка загрузки скриптов.
+window.addEventListener('sputnik-open', () => {
+  if (mountedInstances > 0) return
+  pendingOpen = true
+})
+
 function mountWidget(el: Element, options?: MountOptions): App {
   const attrs = { apiUrl: scriptOrigin || undefined, ...readAttrs(el), ...options }
   const app = createApp(FloatingChat, attrs)
   app.mount(el)
+  mountedInstances += 1
+  if (pendingOpen) {
+    pendingOpen = false
+    window.dispatchEvent(new CustomEvent('sputnik-open'))
+  }
   return app
 }
 
@@ -58,10 +84,11 @@ declare global {
     ParkinsonChatWidget?: {
       mount: typeof mountWidget
       autoMount: typeof autoMount
+      open: typeof openWidget
     }
   }
 }
 
-window.ParkinsonChatWidget = { mount: mountWidget, autoMount }
+window.ParkinsonChatWidget = { mount: mountWidget, autoMount, open: openWidget }
 
-export { FloatingChat, mountWidget, autoMount }
+export { FloatingChat, mountWidget, autoMount, openWidget }

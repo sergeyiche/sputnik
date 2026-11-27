@@ -17,6 +17,21 @@ const props = withDefaults(
   },
 )
 
+type WidgetPosition = 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left'
+
+const WIDGET_POSITIONS: readonly WidgetPosition[] = [
+  'bottom-right',
+  'bottom-left',
+  'top-right',
+  'top-left',
+]
+
+const position = ref<WidgetPosition>('bottom-right')
+
+function isWidgetPosition(value: unknown): value is WidgetPosition {
+  return typeof value === 'string' && (WIDGET_POSITIONS as readonly string[]).includes(value)
+}
+
 const disclaimer = ref(
   'Этот ассистент предоставляет общую справочную информацию и не заменяет консультацию специалиста.',
 )
@@ -83,6 +98,10 @@ onMounted(async () => {
     if (typeof data.legal_notes === 'string') legalNotes.value = data.legal_notes
     if (typeof data.greeting === 'string') greeting.value = data.greeting
     if (data.primary_color) brand.value = data.primary_color
+    if (isWidgetPosition(data.position)) {
+      position.value = data.position
+      placeInitially()
+    }
   } catch {
     /* the widget still opens with the built-in title */
   }
@@ -266,12 +285,11 @@ function placeInitially() {
   panelWidth.value = size.width
   panelHeight.value = size.height
   const offset = window.innerWidth <= 480 ? 12 : 24
-  const pos = clampPosition(
-    window.innerWidth - offset - size.width,
-    window.innerHeight - offset - size.height,
-    size.width,
-    size.height,
-  )
+  const atRight = window.innerWidth - offset - size.width
+  const atBottom = window.innerHeight - offset - size.height
+  const x = position.value.endsWith('left') ? offset : atRight
+  const y = position.value.startsWith('top') ? offset : atBottom
+  const pos = clampPosition(x, y, size.width, size.height)
   panelX.value = pos.x
   panelY.value = pos.y
 }
@@ -448,7 +466,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="pcw-root" aria-live="polite" :style="brandStyle">
+  <div class="pcw-root" :data-position="position" aria-live="polite" :style="brandStyle">
     <button
       v-if="!isOpen"
       class="pcw-launcher"
@@ -692,11 +710,36 @@ onUnmounted(() => {
   position: fixed;
   bottom: 24px;
   right: 24px;
+  top: auto;
+  left: auto;
   z-index: 9999;
   font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   font-size: 16px;
   line-height: 1.5;
   color: #1e293b;
+}
+
+/* Положение иконки выбирается в кабинете (вкладка «Виджет») и приходит
+   в /v1/widget/config; data-position дублирует серверный theme.css. */
+.pcw-root[data-position='top-right'] {
+  top: 24px;
+  right: 24px;
+  bottom: auto;
+  left: auto;
+}
+
+.pcw-root[data-position='bottom-left'] {
+  bottom: 24px;
+  left: 24px;
+  top: auto;
+  right: auto;
+}
+
+.pcw-root[data-position='top-left'] {
+  top: 24px;
+  left: 24px;
+  bottom: auto;
+  right: auto;
 }
 
 .pcw-launcher {
@@ -1294,7 +1337,29 @@ onUnmounted(() => {
   .pcw-root {
     bottom: 12px;
     right: 12px;
+    top: auto;
+    left: auto;
+  }
+
+  .pcw-root[data-position='top-right'] {
+    top: 12px;
+    right: 12px;
+    bottom: auto;
+    left: auto;
+  }
+
+  .pcw-root[data-position='bottom-left'] {
+    bottom: 12px;
     left: 12px;
+    top: auto;
+    right: auto;
+  }
+
+  .pcw-root[data-position='top-left'] {
+    top: 12px;
+    left: 12px;
+    bottom: auto;
+    right: auto;
   }
 }
 </style>

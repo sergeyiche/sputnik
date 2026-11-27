@@ -62,6 +62,7 @@ def test_register_approve_and_isolate_login(tmp_path: Path) -> None:
     assert settings.disclaimer
     assert settings.title == "Спутник"
     assert settings.greeting == ""
+    assert settings.position == "bottom-right"
 
     named = store.register(
         slug="named",
@@ -104,6 +105,35 @@ def test_web_color_normalizes_to_six_digits() -> None:
     assert normalize_web_color("#abc") == "#aabbcc"
     with pytest.raises(PlatformError):
         normalize_web_color("orange")
+
+
+def test_widget_position_is_validated(tmp_path: Path) -> None:
+    store = PlatformStore(tmp_path / "platform.db")
+    tenant = store.register(slug="acme", name="Фонд А", email="owner@acme.org", password="secret123")
+    with pytest.raises(PlatformError):
+        store.update_settings(
+            tenant.id,
+            title="Спутник",
+            description="",
+            primary_color="#fc7f03",
+            show_sources=True,
+            greeting="",
+            disclaimer="Консультация специалиста не заменяется.",
+            legal_notes="",
+            position="middle",
+        )
+    saved = store.update_settings(
+        tenant.id,
+        title="Спутник",
+        description="",
+        primary_color="#fc7f03",
+        show_sources=True,
+        greeting="",
+        disclaimer="Консультация специалиста не заменяется.",
+        legal_notes="",
+        position="top-left",
+    )
+    assert saved.position == "top-left"
 
 
 def test_email_is_required(tmp_path: Path) -> None:

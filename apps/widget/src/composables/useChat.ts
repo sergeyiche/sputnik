@@ -71,7 +71,6 @@ export function useChat(options: UseChatOptions) {
   const restoring = ref(true)
   const error = ref<string | null>(null)
   const suggestions = ref<string[]>([])
-  const fallbackSuggestions = options.fallbackSuggestions ?? []
   const suggestionCount = options.suggestionCount ?? 3
   let historyToken = 0
 

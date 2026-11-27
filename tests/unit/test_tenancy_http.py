@@ -171,6 +171,69 @@ def test_pending_host_shows_site_but_chat_stays_closed(client: TestClient, maile
     assert cabinet.status_code == 200, cabinet.text
 
 
+def test_widget_position_flows_to_theme_css(client: TestClient, mailer: RecordingMailer) -> None:
+    _register(client, "acme", mailer)
+    _approve(client, "acme")
+    host = {"host": "acme.spootnik.ru"}
+
+    preview = client.get("/v1/widget/config", headers=host)
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["position"] == "bottom-right"
+    assert "/v1/widget/theme.css" in preview.json()["snippet"]
+    assert "ParkinsonChatWidget.open" in preview.json()["open_button_snippet"]
+
+    theme = client.get("/v1/widget/theme.css", headers=host)
+    assert theme.status_code == 200, theme.text
+    assert theme.headers["content-type"].startswith("text/css")
+    assert theme.headers["cache-control"] == "no-cache"
+    assert "bottom: 24px" in theme.text and "right: 24px" in theme.text
+
+    login = client.post(
+        "/v1/admin/login",
+        headers=host,
+        json={"username": "acme@example.com", "password": "password1"},
+    )
+    assert login.status_code == 200, login.text
+
+    saved = client.put(
+        "/v1/admin/widget",
+        headers=host,
+        json={
+            "title": "Навигатор",
+            "description": "Ответы по материалам",
+            "primary_color": "#fc7f03",
+            "show_sources": True,
+            "greeting": "",
+            "disclaimer": "Консультация специалиста не заменяется.",
+            "legal_notes": "",
+            "position": "top-left",
+        },
+    )
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["position"] == "top-left"
+
+    theme = client.get("/v1/widget/theme.css", headers=host)
+    assert "top: 24px" in theme.text and "left: 24px" in theme.text
+    assert "top: 12px" in theme.text and "left: 12px" in theme.text
+
+    bad = client.put(
+        "/v1/admin/widget",
+        headers=host,
+        json={
+            "title": "Навигатор",
+            "description": "",
+            "primary_color": "#fc7f03",
+            "show_sources": True,
+            "greeting": "",
+            "disclaimer": "Консультация специалиста не заменяется.",
+            "legal_notes": "",
+            "position": "middle",
+        },
+    )
+    assert bad.status_code == 400
+    assert "Положение виджета" in bad.json()["detail"]
+
+
 def test_starter_questions_are_isolated(client: TestClient, mailer: RecordingMailer) -> None:
     _register(client, "acme", mailer)
     _register(client, "beta", mailer)

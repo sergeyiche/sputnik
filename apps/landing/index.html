@@ -67,14 +67,23 @@
       const origin = location.protocol + '//help.' + apex + (location.port ? ':' + location.port : '')
       const css = document.createElement('link')
       css.rel = 'stylesheet'
-      css.href = origin + '/widget/sputnik.css?v=20261024e'
+      css.href = origin + '/widget/sputnik.css?v=20261127a'
       document.head.appendChild(css)
+      const theme = document.createElement('link')
+      theme.rel = 'stylesheet'
+      theme.href = origin + '/v1/widget/theme.css'
+      document.head.appendChild(theme)
       const script = document.createElement('script')
-      script.src = origin + '/widget/sputnik.js?v=20261024e'
+      script.src = origin + '/widget/sputnik.js?v=20261127a'
       document.body.appendChild(script)
     })()
     document.getElementById('ask').addEventListener('click', () => {
-      window.dispatchEvent(new Event('sputnik-open'))
+      if (window.ParkinsonChatWidget && window.ParkinsonChatWidget.open) {
+        window.ParkinsonChatWidget.open()
+      } else {
+        // Виджет ещё не загрузился: событие запомнится и откроет чат после загрузки.
+        window.dispatchEvent(new Event('sputnik-open'))
+      }
     })
     document.getElementById('zayavka').addEventListener('submit', async (event) => {
       event.preventDefault()

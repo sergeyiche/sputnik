@@ -27,6 +27,8 @@ DEFAULT_DISCLAIMER = (
 )
 DEFAULT_TITLE = "Спутник"
 DEFAULT_COLOR = "#fc7f03"
+WIDGET_POSITIONS = ("bottom-right", "bottom-left", "top-right", "top-left")
+DEFAULT_WIDGET_POSITION = "bottom-right"
 _HEX = set("0123456789abcdef")
 MAX_WIDGET_TITLE = 120
 MAX_WIDGET_DESCRIPTION = 150
@@ -95,6 +97,7 @@ class WidgetSettings:
     disclaimer: str
     legal_notes: str
     logo_name: str
+    position: str
 
 
 @dataclass(frozen=True)
@@ -1259,6 +1262,7 @@ class PlatformStore:
             disclaimer=row["disclaimer"],
             legal_notes=row["legal_notes"],
             logo_name=row["logo_name"],
+            position=row["position"] or DEFAULT_WIDGET_POSITION,
         )
 
     def update_settings(
@@ -1272,6 +1276,7 @@ class PlatformStore:
         greeting: str,
         disclaimer: str,
         legal_notes: str,
+        position: str = DEFAULT_WIDGET_POSITION,
         logo_name: str | None = None,
     ) -> WidgetSettings:
         title = title.strip()
@@ -1293,6 +1298,8 @@ class PlatformStore:
             raise PlatformError("Юридическая информация длиннее 250 символов")
         if len(legal_notes) > MAX_LEGAL_NOTES:
             raise PlatformError("Подробная юридическая информация длиннее 3000 символов")
+        if position not in WIDGET_POSITIONS:
+            raise PlatformError("Положение виджета: bottom-right, bottom-left, top-right или top-left")
         primary_color = normalize_web_color(primary_color)
         with self._lock, self._session() as conn:
             fields = [
@@ -1303,11 +1310,12 @@ class PlatformStore:
                 greeting,
                 disclaimer,
                 legal_notes,
+                position,
             ]
             sql = """
                 UPDATE widget_settings
                 SET title = ?, description = ?, primary_color = ?, show_sources = ?,
-                    greeting = ?, disclaimer = ?, legal_notes = ?
+                    greeting = ?, disclaimer = ?, legal_notes = ?, position = ?
             """
             if logo_name is not None:
                 sql += ", logo_name = ?"
@@ -1432,10 +1440,10 @@ class PlatformStore:
             """
             INSERT INTO widget_settings (
                 tenant_id, title, description, primary_color, show_sources,
-                greeting, disclaimer, legal_notes, logo_name
-            ) VALUES (?, ?, ?, ?, 1, '', ?, '', '')
+                greeting, disclaimer, legal_notes, logo_name, position
+            ) VALUES (?, ?, ?, ?, 1, '', ?, '', '', ?)
             """,
-            (tenant_id, title, description, primary_color, DEFAULT_DISCLAIMER),
+            (tenant_id, title, description, primary_color, DEFAULT_DISCLAIMER, DEFAULT_WIDGET_POSITION),
         )
 
     @contextmanager
@@ -1481,7 +1489,8 @@ class PlatformStore:
                     greeting TEXT NOT NULL DEFAULT '',
                     disclaimer TEXT NOT NULL,
                     legal_notes TEXT NOT NULL,
-                    logo_name TEXT NOT NULL DEFAULT ''
+                    logo_name TEXT NOT NULL DEFAULT '',
+                    position TEXT NOT NULL DEFAULT 'bottom-right'
                 );
                 CREATE TABLE IF NOT EXISTS usage_daily (
                     tenant_id INTEGER NOT NULL REFERENCES tenants(id),
@@ -1601,6 +1610,10 @@ class PlatformStore:
             widget_columns = {row[1] for row in conn.execute("PRAGMA table_info(widget_settings)")}
             if "greeting" not in widget_columns:
                 conn.execute("ALTER TABLE widget_settings ADD COLUMN greeting TEXT NOT NULL DEFAULT ''")
+            if "position" not in widget_columns:
+                conn.execute(
+                    "ALTER TABLE widget_settings ADD COLUMN position TEXT NOT NULL DEFAULT 'bottom-right'"
+                )
             self._backfill_emails(conn)
             self._seed_parkinson_questions(conn)
             self._seed_parkinson_greeting(conn)
