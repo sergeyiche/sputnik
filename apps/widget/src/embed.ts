@@ -53,6 +53,16 @@ window.addEventListener('sputnik-open', () => {
   pendingOpen = true
 })
 
+// Кнопка на сайте могла быть нажата ещё до загрузки самого скрипта виджета:
+// страница выставляет этот флаг, embed проверяет его сразу после загрузки.
+const openRequested = (
+  window as unknown as { __sputnikOpenRequested?: boolean }
+).__sputnikOpenRequested
+if (openRequested) {
+  pendingOpen = true
+  ;(window as unknown as { __sputnikOpenRequested?: boolean }).__sputnikOpenRequested = false
+}
+
 function mountWidget(el: Element, options?: MountOptions): App {
   const attrs = { apiUrl: scriptOrigin || undefined, ...readAttrs(el), ...options }
   const app = createApp(FloatingChat, attrs)

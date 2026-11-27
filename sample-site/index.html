@@ -139,7 +139,8 @@
       if (window.ParkinsonChatWidget && window.ParkinsonChatWidget.open) {
         window.ParkinsonChatWidget.open()
       } else {
-        // Виджет ещё не загрузился: событие запомнится и откроет чат после загрузки.
+        // Виджет ещё не загрузился: запомним запрос, он откроет чат после загрузки.
+        window.__sputnikOpenRequested = true
         window.dispatchEvent(new CustomEvent('sputnik-open'))
       }
     }

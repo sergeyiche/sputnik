@@ -84,6 +84,7 @@ def _public(store: PlatformStore, tenant) -> dict:
             "    if (window.ParkinsonChatWidget && window.ParkinsonChatWidget.open) {\n"
             "      window.ParkinsonChatWidget.open();\n"
             "    } else {\n"
+            "      window.__sputnikOpenRequested = true;\n"
             "      window.dispatchEvent(new CustomEvent('sputnik-open'));\n"
             "    }\n"
             "  });\n"
