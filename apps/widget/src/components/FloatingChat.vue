@@ -742,6 +742,37 @@ onUnmounted(() => {
   right: auto;
 }
 
+/* Защита от глобальных стилей сайта клиента: темы WordPress и сборки часто
+   задают всем <button> большие padding, uppercase, серый фон и overflow.
+   Сбрасываем их для кнопок виджета; конкретные классы ниже задают свой вид. */
+.pcw-launcher,
+.pcw-icon-btn,
+.pcw-send,
+.pcw-suggestion,
+.pcw-sources__toggle,
+.pcw-legal-help,
+.pcw-legal-close {
+  font-family: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  letter-spacing: normal;
+  text-transform: none;
+  line-height: 1.4;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+  -webkit-appearance: none;
+  appearance: none;
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: none;
+  overflow: visible;
+  vertical-align: baseline;
+}
+
 .pcw-launcher {
   width: 60px;
   height: 60px;
@@ -759,6 +790,7 @@ onUnmounted(() => {
 
 .pcw-launcher:hover {
   transform: scale(1.05);
+  background-color: var(--pcw-brand);
 }
 
 .pcw-panel {
